@@ -891,7 +891,7 @@ const CSS = `
     display: flex;
     align-items: center;
     padding: 0 16px;
-    z-index: 10;
+    z-index: 1000;
     pointer-events: auto;
 }
 .snap-timeline-track {
@@ -1413,10 +1413,14 @@ function buildTimeline() {
         return;
     }
 
-    // Ensure parent is positioned so absolute children work
+    // Ensure parent is positioned so absolute children work, and
+    // sits above the ComfyUI sidebar (z-index: 10) in the stacking order
     const parentPos = getComputedStyle(canvasParent).position;
     if (parentPos === "static") {
         canvasParent.style.position = "relative";
+    }
+    if (!canvasParent.style.zIndex) {
+        canvasParent.style.zIndex = "20";
     }
 
     // Create root element
