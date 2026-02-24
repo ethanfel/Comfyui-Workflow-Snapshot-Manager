@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://registry.comfy.org/publishers/ethanfel/nodes/comfyui-snapshot-manager"><img src="https://img.shields.io/badge/ComfyUI-Registry-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=" alt="ComfyUI Registry"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/></a>
-  <img src="https://img.shields.io/badge/version-2.1.0-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-2.2.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/ComfyUI-Extension-purple" alt="ComfyUI Extension"/>
 </p>
 
@@ -28,6 +28,10 @@
 - **Theme-aware UI** — Adapts to light and dark ComfyUI themes
 - **Toast notifications** — Visual feedback for save, restore, and error operations
 - **SaveSnapshot node** — Trigger snapshot captures from your workflow with a custom node; node snapshots are visually distinct (purple border + "Node" badge) and have their own rolling limit
+- **Timeline bar** — Optional visual timeline on the canvas showing all snapshots as dots, with a Snapshot button for quick captures
+- **Active & current markers** — When you swap to a snapshot, the timeline highlights where you came from (green dot) and where you are (white ring)
+- **Auto-save before swap** — Swapping to an older snapshot automatically saves your current state first, so you can always get back
+- **Ctrl+S shortcut** — Press Ctrl+S (or Cmd+S on Mac) to take a manual snapshot alongside ComfyUI's own save
 - **Lock/pin snapshots** — Protect important snapshots from auto-pruning and "Clear All" with a single click
 - **Concurrency-safe** — Lock guard prevents double-click issues during restore
 - **Server-side storage** — Snapshots persist on the ComfyUI server's filesystem, accessible from any browser
@@ -91,14 +95,36 @@ Click the **workflow name** below the header to expand the workflow picker. It l
 
 This is especially useful for recovering snapshots from workflows that were renamed or deleted.
 
-### 8. Delete & Clear
+### 8. Timeline Bar
+
+Enable the timeline in **Settings > Snapshot Manager > Timeline > Show snapshot timeline on canvas**. A thin bar appears at the bottom of the canvas with a dot for each snapshot:
+
+| Marker | Meaning |
+|--------|---------|
+| **Blue dot** | Regular snapshot |
+| **Purple dot** | Node-triggered snapshot |
+| **Yellow border** | Locked snapshot |
+| **White ring (larger)** | Active — the snapshot you swapped TO |
+| **Green dot** | Current — your auto-saved state before the swap |
+
+Click any dot to swap to that snapshot. The **Snapshot** button on the right side of the bar takes a quick manual snapshot.
+
+### 9. Auto-save Before Swap
+
+When you swap to an older snapshot (via the sidebar or timeline), the extension automatically captures a "Current" snapshot of your work-in-progress first. This green-marked snapshot appears on the timeline so you can click it to get back. The marker disappears once you edit the graph (since auto-capture creates a proper snapshot at that point).
+
+### 10. Keyboard Shortcut
+
+Press **Ctrl+S** (or **Cmd+S** on Mac) to take a manual snapshot. This works alongside ComfyUI's own workflow save — both fire simultaneously.
+
+### 11. Delete & Clear
 
 - Click **&times;** on any snapshot to delete it individually (locked snapshots prompt for confirmation)
 - Click **Clear All Snapshots** in the footer to remove all unlocked snapshots for the current workflow (locked snapshots are preserved)
 
 ## Settings
 
-All settings are available in **ComfyUI Settings > Snapshot Manager > Capture Settings**:
+All settings are available in **ComfyUI Settings > Snapshot Manager**:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
@@ -107,6 +133,7 @@ All settings are available in **ComfyUI Settings > Snapshot Manager > Capture Se
 | **Max snapshots per workflow** | Slider | `50` | Maximum number of unlocked snapshots kept per workflow (5–200). Oldest unlocked are pruned automatically; locked snapshots are never pruned |
 | **Capture on workflow load** | Toggle | `On` | Save an "Initial" snapshot when a workflow is first loaded |
 | **Max node-triggered snapshots** | Slider | `5` | Rolling limit for SaveSnapshot node captures per workflow (1–50). Node snapshots are pruned independently from auto/manual snapshots |
+| **Show snapshot timeline** | Toggle | `Off` | Display a timeline bar at the bottom of the canvas with snapshot markers, active/current indicators, and a quick Snapshot button |
 
 ## Architecture
 
@@ -129,6 +156,14 @@ All settings are available in **ComfyUI Settings > Snapshot Manager > Capture Se
 2. A **WebSocket event** is sent to the frontend, **skipping hash dedup** (the workflow doesn't change between runs)
 3. The snapshot is saved with `source: "node"` and pruned against its own rolling limit (`maxNodeSnapshots`)
 4. Node snapshots appear in the sidebar with a **purple left border** and **"Node" badge**
+
+**Swap with auto-save:**
+
+1. User clicks **Swap** (sidebar or timeline marker)
+2. `captureSnapshot("Current")` saves the current graph state **before** the swap — hash dedup prevents duplicates if nothing changed
+3. The target snapshot is loaded into the graph
+4. The **timeline** updates: the swapped-to snapshot gets a white ring (active), the auto-saved snapshot gets a green dot (current)
+5. Clicking the green dot swaps back; editing the graph clears both markers (the next auto-capture supersedes them)
 
 **Storage:** Snapshots are stored as JSON files on the server at `<extension_dir>/data/snapshots/<workflow_key>/<id>.json`. They persist across browser sessions, ComfyUI restarts, and are accessible from any browser connecting to the same server.
 
