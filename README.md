@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://registry.comfy.org/publishers/ethanfel/nodes/comfyui-snapshot-manager"><img src="https://img.shields.io/badge/ComfyUI-Registry-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=" alt="ComfyUI Registry"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/></a>
-  <img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-1.0.1-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/ComfyUI-Extension-purple" alt="ComfyUI Extension"/>
 </p>
 
@@ -26,6 +26,7 @@
 - **Per-workflow storage** — Each workflow has its own independent snapshot history
 - **Theme-aware UI** — Adapts to light and dark ComfyUI themes
 - **Toast notifications** — Visual feedback for save, restore, and error operations
+- **Lock/pin snapshots** — Protect important snapshots from auto-pruning and "Clear All" with a single click
 - **Concurrency-safe** — Lock guard prevents double-click issues during restore
 - **Zero backend** — Pure frontend extension, no server dependencies
 
@@ -64,17 +65,27 @@ Use the filter bar at the top of the panel to search snapshots by name. The clea
 
 ### 5. Restore or Swap
 
-Each snapshot has two action buttons:
+Each snapshot has action buttons:
 
 | Button | Action |
 |--------|--------|
+| **Lock** | Toggles lock protection (padlock icon) |
 | **Swap** | Replaces the current workflow in-place (same tab) |
 | **Restore** | Opens the snapshot as a new workflow |
 
-### 6. Delete & Clear
+### 6. Lock / Pin Snapshots
 
-- Click **&times;** on any snapshot to delete it individually
-- Click **Clear All Snapshots** in the footer to remove all snapshots for the current workflow (with confirmation dialog)
+Click the **padlock icon** on any snapshot to lock it. Locked snapshots are protected from:
+
+- **Auto-pruning** — When the snapshot count exceeds the max, only unlocked snapshots are pruned
+- **Clear All** — Locked snapshots survive bulk deletion (the toast reports how many were kept)
+
+To unlock, click the padlock again. Deleting a locked snapshot individually is still possible but requires confirmation.
+
+### 7. Delete & Clear
+
+- Click **&times;** on any snapshot to delete it individually (locked snapshots prompt for confirmation)
+- Click **Clear All Snapshots** in the footer to remove all unlocked snapshots for the current workflow (locked snapshots are preserved)
 
 ## Settings
 
@@ -84,7 +95,7 @@ All settings are available in **ComfyUI Settings > Snapshot Manager > Capture Se
 |---------|------|---------|-------------|
 | **Auto-capture on edit** | Toggle | `On` | Automatically save snapshots when the workflow changes |
 | **Capture delay** | Slider | `3s` | Seconds to wait after the last edit before auto-capturing (1–30s) |
-| **Max snapshots per workflow** | Slider | `50` | Maximum number of snapshots kept per workflow (5–200). Oldest are pruned automatically |
+| **Max snapshots per workflow** | Slider | `50` | Maximum number of unlocked snapshots kept per workflow (5–200). Oldest unlocked are pruned automatically; locked snapshots are never pruned |
 | **Capture on workflow load** | Toggle | `On` | Save an "Initial" snapshot when a workflow is first loaded |
 
 ## Architecture
