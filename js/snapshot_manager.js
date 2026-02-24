@@ -112,16 +112,20 @@ async function db_delete(id) {
 async function db_deleteAllForWorkflow(workflowKey) {
     try {
         const records = await db_getAllForWorkflow(workflowKey);
+        const toDelete = records.filter(r => !r.locked);
+        const lockedCount = records.length - toDelete.length;
+        if (toDelete.length === 0) return { lockedCount };
         const db = await openDB();
-        return new Promise((resolve, reject) => {
+        await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE_NAME, "readwrite");
             const store = tx.objectStore(STORE_NAME);
-            for (const r of records) {
+            for (const r of toDelete) {
                 store.delete(r.id);
             }
             tx.oncomplete = () => resolve();
             tx.onerror = () => reject(tx.error);
         });
+        return { lockedCount };
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] IndexedDB bulk delete failed:`, err);
         showToast("Failed to clear snapshots", "error");
@@ -132,9 +136,11 @@ async function db_deleteAllForWorkflow(workflowKey) {
 async function pruneSnapshots(workflowKey) {
     try {
         const all = await db_getAllForWorkflow(workflowKey);
-        if (all.length <= maxSnapshots) return;
+        // Only prune unlocked snapshots; locked ones are protected
+        const unlocked = all.filter(r => !r.locked);
+        if (unlocked.length <= maxSnapshots) return;
         // sorted ascending by timestamp (index order), oldest first
-        const toDelete = all.slice(0, all.length - maxSnapshots);
+        const toDelete = unlocked.slice(0, unlocked.length - maxSnapshots);
         const db = await openDB();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(STORE_NAME, "readwrite");
@@ -263,6 +269,7 @@ async function captureSnapshot(label = "Auto") {
         label,
         nodeCount: nodes.length,
         graphData,
+        locked: false,
     };
 
     try {
@@ -476,6 +483,14 @@ const CSS = `
 .snap-btn-restore:hover:not(:disabled) {
     background: #16a34a;
 }
+.snap-btn-lock {
+    background: var(--comfy-menu-bg, #444);
+    color: var(--descrip-text, #aaa);
+    font-size: 13px;
+}
+.snap-btn-lock.snap-btn-locked {
+    color: #3b82f6;
+}
 .snap-btn-delete {
     background: var(--comfy-menu-bg, #444);
     color: var(--descrip-text, #aaa);
@@ -604,8 +619,12 @@ async function buildSidebar(el) {
         const confirmed = await showConfirmDialog("Delete all snapshots for this workflow?");
         if (!confirmed) return;
         try {
-            await db_deleteAllForWorkflow(getWorkflowKey());
-            showToast("All snapshots cleared", "info");
+            const { lockedCount } = await db_deleteAllForWorkflow(getWorkflowKey());
+            if (lockedCount > 0) {
+                showToast(`Cleared snapshots (${lockedCount} locked kept)`, "info");
+            } else {
+                showToast("All snapshots cleared", "info");
+            }
         } catch {
             // db_deleteAllForWorkflow already toasts on error
         }
@@ -691,6 +710,16 @@ async function buildSidebar(el) {
             const actions = document.createElement("div");
             actions.className = "snap-item-actions";
 
+            const lockBtn = document.createElement("button");
+            lockBtn.className = rec.locked ? "snap-btn-lock snap-btn-locked" : "snap-btn-lock";
+            lockBtn.textContent = rec.locked ? "\uD83D\uDD12" : "\uD83D\uDD13";
+            lockBtn.title = rec.locked ? "Unlock snapshot" : "Lock snapshot";
+            lockBtn.addEventListener("click", async () => {
+                rec.locked = !rec.locked;
+                await db_put(rec);
+                await refresh();
+            });
+
             const swapBtn = document.createElement("button");
             swapBtn.className = "snap-btn-swap";
             swapBtn.textContent = "Swap";
@@ -714,10 +743,15 @@ async function buildSidebar(el) {
             deleteBtn.textContent = "\u2715";
             deleteBtn.title = "Delete this snapshot";
             deleteBtn.addEventListener("click", async () => {
+                if (rec.locked) {
+                    const confirmed = await showConfirmDialog("This snapshot is locked. Delete anyway?");
+                    if (!confirmed) return;
+                }
                 await db_delete(rec.id);
                 await refresh();
             });
 
+            actions.appendChild(lockBtn);
             actions.appendChild(swapBtn);
             actions.appendChild(restoreBtn);
             actions.appendChild(deleteBtn);
