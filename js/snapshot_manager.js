@@ -1441,6 +1441,16 @@ function buildTimeline() {
     bar.appendChild(track);
     bar.appendChild(snapBtn);
 
+    // Offset timeline to avoid floating sidebar overlap
+    const leftToolbar = document.querySelector(".comfyui-body-left .side-tool-bar-container");
+    const rightToolbar = document.querySelector(".comfyui-body-right .side-tool-bar-container");
+    if (leftToolbar && !leftToolbar.classList.contains("connected-sidebar")) {
+        bar.style.paddingLeft = "calc(var(--sidebar-width, 48px) + 16px)";
+    }
+    if (rightToolbar && !rightToolbar.classList.contains("connected-sidebar")) {
+        bar.style.paddingRight = "calc(var(--sidebar-width, 48px) + 16px)";
+    }
+
     canvasParent.appendChild(bar);
     timelineEl = bar;
 
