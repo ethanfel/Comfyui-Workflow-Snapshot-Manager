@@ -544,11 +544,13 @@ async function restoreSnapshot(record) {
 }
 
 async function swapSnapshot(record) {
-    // Auto-save current state before swapping (so user can get back)
+    // Auto-save current state before swapping (so user can get back),
+    // but skip if the graph is already a saved snapshot (browsing between old ones)
     const prevCurrentId = currentSnapshotId;
-    const capturedId = await captureSnapshot("Current");
-    // captureSnapshot clears currentSnapshotId; restore or update it
-    currentSnapshotId = capturedId || prevCurrentId;
+    if (!activeSnapshotId) {
+        const capturedId = await captureSnapshot("Current");
+        currentSnapshotId = capturedId || prevCurrentId;
+    }
 
     await withRestoreLock(async () => {
         if (!validateSnapshotData(record.graphData)) {
