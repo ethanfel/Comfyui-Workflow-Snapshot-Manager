@@ -894,7 +894,7 @@ const CSS = `
     display: flex;
     align-items: center;
     padding: 0 16px;
-    z-index: 1000;
+    z-index: 9;
     pointer-events: auto;
 }
 .snap-timeline-track {
