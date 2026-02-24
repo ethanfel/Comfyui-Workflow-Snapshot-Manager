@@ -28,6 +28,8 @@ const lastCapturedHashMap = new Map();
 let restoreLock = null;
 let captureTimer = null;
 let sidebarRefresh = null; // callback set by sidebar render
+let viewingWorkflowKey = null; // null = follow active workflow; string = override
+let pickerDirty = true; // forces workflow picker to re-fetch on next expand
 
 // ─── IndexedDB Layer ─────────────────────────────────────────────────
 
@@ -133,6 +135,34 @@ async function db_deleteAllForWorkflow(workflowKey) {
     }
 }
 
+async function db_getAllWorkflowKeys() {
+    try {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, "readonly");
+            const idx = tx.objectStore(STORE_NAME).index("workflowKey");
+            const req = idx.openKeyCursor();
+            const counts = new Map();
+            req.onsuccess = () => {
+                const cursor = req.result;
+                if (cursor) {
+                    counts.set(cursor.key, (counts.get(cursor.key) || 0) + 1);
+                    cursor.continue();
+                } else {
+                    const result = Array.from(counts.entries())
+                        .map(([workflowKey, count]) => ({ workflowKey, count }))
+                        .sort((a, b) => a.workflowKey.localeCompare(b.workflowKey));
+                    resolve(result);
+                }
+            };
+            req.onerror = () => reject(req.error);
+        });
+    } catch (err) {
+        console.warn(`[${EXTENSION_NAME}] IndexedDB key scan failed:`, err);
+        return [];
+    }
+}
+
 async function pruneSnapshots(workflowKey) {
     try {
         const all = await db_getAllForWorkflow(workflowKey);
@@ -173,6 +203,10 @@ function getWorkflowKey() {
     } catch {
         return "default";
     }
+}
+
+function getEffectiveWorkflowKey() {
+    return viewingWorkflowKey ?? getWorkflowKey();
 }
 
 function getGraphData() {
@@ -280,6 +314,7 @@ async function captureSnapshot(label = "Auto") {
     }
 
     lastCapturedHashMap.set(workflowKey, hash);
+    pickerDirty = true;
 
     if (sidebarRefresh) {
         sidebarRefresh().catch(() => {});
@@ -487,9 +522,12 @@ const CSS = `
     background: var(--comfy-menu-bg, #444);
     color: var(--descrip-text, #aaa);
     font-size: 13px;
+    min-width: 28px;
+    text-align: center;
 }
 .snap-btn-lock.snap-btn-locked {
-    color: #3b82f6;
+    background: #2563eb;
+    color: #fff;
 }
 .snap-btn-delete {
     background: var(--comfy-menu-bg, #444);
@@ -524,6 +562,111 @@ const CSS = `
     text-align: center;
     color: var(--descrip-text, #666);
     font-size: 12px;
+}
+.snap-workflow-selector {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-color, #444);
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    gap: 4px;
+    flex-shrink: 0;
+    user-select: none;
+}
+.snap-workflow-selector:hover {
+    background: var(--comfy-menu-bg, #2a2a2a);
+}
+.snap-workflow-selector.snap-viewing-other {
+    border-left: 3px solid #f59e0b;
+    padding-left: 7px;
+}
+.snap-workflow-selector-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--descrip-text, #888);
+}
+.snap-workflow-selector-arrow {
+    font-size: 10px;
+    color: var(--descrip-text, #888);
+    flex-shrink: 0;
+    transition: transform 0.15s;
+}
+.snap-workflow-selector-arrow.expanded {
+    transform: rotate(180deg);
+}
+.snap-workflow-list {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.15s ease-out;
+}
+.snap-workflow-list.expanded {
+    max-height: 200px;
+    overflow-y: auto;
+    border-bottom: 1px solid var(--border-color, #444);
+}
+.snap-workflow-item {
+    padding: 4px 10px 4px 18px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--input-text, #ccc);
+}
+.snap-workflow-item:hover {
+    background: var(--comfy-menu-bg, #2a2a2a);
+}
+.snap-workflow-item.active {
+    font-weight: 700;
+    color: #3b82f6;
+}
+.snap-workflow-item-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.snap-workflow-item-count {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--descrip-text, #888);
+}
+.snap-workflow-viewing-banner {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border-color, #444);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(245, 158, 11, 0.1);
+    font-size: 11px;
+    flex-shrink: 0;
+}
+.snap-workflow-viewing-banner span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #f59e0b;
+}
+.snap-workflow-viewing-banner button {
+    padding: 2px 8px;
+    border: 1px solid #f59e0b;
+    border-radius: 3px;
+    background: transparent;
+    color: #f59e0b;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.snap-workflow-viewing-banner button:hover {
+    background: rgba(245, 158, 11, 0.2);
 }
 `;
 
@@ -568,7 +711,8 @@ async function buildSidebar(el) {
             const saved = await captureSnapshot(name);
             if (saved) showToast("Snapshot saved", "success");
         } finally {
-            takeBtn.disabled = false;
+            const isViewingOther = viewingWorkflowKey != null && viewingWorkflowKey !== getWorkflowKey();
+            takeBtn.disabled = isViewingOther;
             takeBtn.textContent = "Take Snapshot";
         }
     });
@@ -605,6 +749,106 @@ async function buildSidebar(el) {
     searchRow.appendChild(searchInput);
     searchRow.appendChild(searchClear);
 
+    // Workflow selector
+    const selectorRow = document.createElement("div");
+    selectorRow.className = "snap-workflow-selector";
+
+    const selectorLabel = document.createElement("span");
+    selectorLabel.className = "snap-workflow-selector-label";
+    selectorLabel.textContent = getWorkflowKey();
+
+    const selectorArrow = document.createElement("span");
+    selectorArrow.className = "snap-workflow-selector-arrow";
+    selectorArrow.textContent = "\u25BC";
+
+    selectorRow.appendChild(selectorLabel);
+    selectorRow.appendChild(selectorArrow);
+
+    // Workflow picker list (expandable)
+    const pickerList = document.createElement("div");
+    pickerList.className = "snap-workflow-list";
+    let pickerExpanded = false;
+
+    async function populatePicker() {
+        pickerList.innerHTML = "";
+        const keys = await db_getAllWorkflowKeys();
+        const effectiveKey = getEffectiveWorkflowKey();
+        const currentKey = getWorkflowKey();
+
+        if (keys.length === 0) {
+            const empty = document.createElement("div");
+            empty.style.cssText = "padding: 6px 18px; font-size: 11px; color: var(--descrip-text, #888);";
+            empty.textContent = "No workflows found";
+            pickerList.appendChild(empty);
+            return;
+        }
+
+        for (const entry of keys) {
+            const row = document.createElement("div");
+            row.className = "snap-workflow-item";
+            if (entry.workflowKey === effectiveKey) row.classList.add("active");
+
+            const nameSpan = document.createElement("span");
+            nameSpan.className = "snap-workflow-item-name";
+            nameSpan.textContent = entry.workflowKey;
+
+            const countSpanItem = document.createElement("span");
+            countSpanItem.className = "snap-workflow-item-count";
+            countSpanItem.textContent = `(${entry.count})`;
+
+            row.appendChild(nameSpan);
+            row.appendChild(countSpanItem);
+
+            row.addEventListener("click", async () => {
+                if (entry.workflowKey === currentKey) {
+                    viewingWorkflowKey = null;
+                } else {
+                    viewingWorkflowKey = entry.workflowKey;
+                }
+                collapsePicker();
+                await refresh(true);
+            });
+
+            pickerList.appendChild(row);
+        }
+        pickerDirty = false;
+    }
+
+    function collapsePicker() {
+        pickerExpanded = false;
+        pickerList.classList.remove("expanded");
+        selectorArrow.classList.remove("expanded");
+    }
+
+    selectorRow.addEventListener("click", async () => {
+        pickerExpanded = !pickerExpanded;
+        if (pickerExpanded) {
+            if (pickerDirty) await populatePicker();
+            pickerList.classList.add("expanded");
+            selectorArrow.classList.add("expanded");
+        } else {
+            collapsePicker();
+        }
+    });
+
+    // Viewing-other-workflow banner
+    const viewingBanner = document.createElement("div");
+    viewingBanner.className = "snap-workflow-viewing-banner";
+    viewingBanner.style.display = "none";
+
+    const viewingLabel = document.createElement("span");
+    viewingLabel.textContent = "";
+
+    const backBtn = document.createElement("button");
+    backBtn.textContent = "Back to current";
+    backBtn.addEventListener("click", async () => {
+        viewingWorkflowKey = null;
+        await refresh(true);
+    });
+
+    viewingBanner.appendChild(viewingLabel);
+    viewingBanner.appendChild(backBtn);
+
     // List
     const list = document.createElement("div");
     list.className = "snap-list";
@@ -616,10 +860,12 @@ async function buildSidebar(el) {
     const clearBtn = document.createElement("button");
     clearBtn.textContent = "Clear All Snapshots";
     clearBtn.addEventListener("click", async () => {
-        const confirmed = await showConfirmDialog("Delete all snapshots for this workflow?");
+        const effKey = getEffectiveWorkflowKey();
+        const confirmed = await showConfirmDialog(`Delete all snapshots for "${effKey}"?`);
         if (!confirmed) return;
         try {
-            const { lockedCount } = await db_deleteAllForWorkflow(getWorkflowKey());
+            const { lockedCount } = await db_deleteAllForWorkflow(effKey);
+            pickerDirty = true;
             if (lockedCount > 0) {
                 showToast(`Cleared snapshots (${lockedCount} locked kept)`, "info");
             } else {
@@ -633,6 +879,9 @@ async function buildSidebar(el) {
     footer.appendChild(clearBtn);
 
     container.appendChild(header);
+    container.appendChild(selectorRow);
+    container.appendChild(pickerList);
+    container.appendChild(viewingBanner);
     container.appendChild(searchRow);
     container.appendChild(list);
     container.appendChild(footer);
@@ -656,20 +905,40 @@ async function buildSidebar(el) {
     }
 
     async function refresh(resetSearch = false) {
-        const workflowKey = getWorkflowKey();
-        const records = await db_getAllForWorkflow(workflowKey);
+        const currentKey = getWorkflowKey();
+        const effKey = getEffectiveWorkflowKey();
+        const isViewingOther = viewingWorkflowKey != null && viewingWorkflowKey !== currentKey;
+
+        const records = await db_getAllForWorkflow(effKey);
         // newest first
         records.sort((a, b) => b.timestamp - a.timestamp);
 
         countSpan.textContent = `${records.length} / ${maxSnapshots}`;
 
-        list.innerHTML = "";
-        itemEntries = [];
+        // Update selector label and styling
+        selectorLabel.textContent = effKey;
+        selectorRow.classList.toggle("snap-viewing-other", isViewingOther);
 
+        // Show/hide viewing banner
+        if (isViewingOther) {
+            viewingLabel.textContent = `Viewing: ${viewingWorkflowKey}`;
+            viewingBanner.style.display = "";
+            takeBtn.disabled = true;
+        } else {
+            viewingBanner.style.display = "none";
+            takeBtn.disabled = false;
+        }
+
+        // Mark picker stale; only collapse on user-initiated refreshes
+        pickerDirty = true;
         if (resetSearch) {
+            collapsePicker();
             searchInput.value = "";
             searchClear.classList.remove("visible");
         }
+
+        list.innerHTML = "";
+        itemEntries = [];
 
         if (records.length === 0) {
             const empty = document.createElement("div");
@@ -748,6 +1017,7 @@ async function buildSidebar(el) {
                     if (!confirmed) return;
                 }
                 await db_delete(rec.id);
+                pickerDirty = true;
                 await refresh();
             });
 
@@ -837,6 +1107,7 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                 },
                 destroy: () => {
                     sidebarRefresh = null;
+                    viewingWorkflowKey = null;
                 },
             });
         },
@@ -855,6 +1126,7 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                         clearTimeout(captureTimer);
                         captureTimer = null;
                     }
+                    viewingWorkflowKey = null;
                     if (sidebarRefresh) {
                         sidebarRefresh(true).catch(() => {});
                     }

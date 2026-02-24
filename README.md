@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://registry.comfy.org/publishers/ethanfel/nodes/comfyui-snapshot-manager"><img src="https://img.shields.io/badge/ComfyUI-Registry-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=" alt="ComfyUI Registry"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/></a>
-  <img src="https://img.shields.io/badge/version-1.0.1-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-1.1.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/ComfyUI-Extension-purple" alt="ComfyUI Extension"/>
 </p>
 
@@ -23,6 +23,7 @@
 - **Custom naming** — Name your snapshots when taking them manually ("Before merge", "Working v2", etc.)
 - **Search & filter** — Quickly find snapshots by name with the filter bar
 - **Restore or Swap** — Open a snapshot as a new workflow, or replace the current one in-place
+- **Workflow browser** — Browse and recover snapshots from any workflow, including renamed or deleted ones
 - **Per-workflow storage** — Each workflow has its own independent snapshot history
 - **Theme-aware UI** — Adapts to light and dark ComfyUI themes
 - **Toast notifications** — Visual feedback for save, restore, and error operations
@@ -82,7 +83,13 @@ Click the **padlock icon** on any snapshot to lock it. Locked snapshots are prot
 
 To unlock, click the padlock again. Deleting a locked snapshot individually is still possible but requires confirmation.
 
-### 7. Delete & Clear
+### 7. Browse Other Workflows
+
+Click the **workflow name** below the header to expand the workflow picker. It lists every workflow that has snapshots in the database, with counts. Click any workflow to view its snapshots — an amber banner confirms you're viewing a different workflow, and "Take Snapshot" is disabled to avoid confusion. Click **Back to current** to return.
+
+This is especially useful for recovering snapshots from workflows that were renamed or deleted.
+
+### 8. Delete & Clear
 
 - Click **&times;** on any snapshot to delete it individually (locked snapshots prompt for confirmation)
 - Click **Clear All Snapshots** in the footer to remove all unlocked snapshots for the current workflow (locked snapshots are preserved)
@@ -124,7 +131,10 @@ In your browser's IndexedDB under the database `ComfySnapshotManager`. They pers
 No. Snapshots are captured asynchronously after a debounce delay. The hash check prevents redundant writes.
 
 **What happens if I switch workflows?**
-Each workflow has its own snapshot history. Switching workflows cancels any pending captures and shows the correct snapshot list.
+Each workflow has its own snapshot history. Switching workflows cancels any pending captures and shows the correct snapshot list. You can also browse snapshots from other workflows using the workflow picker.
+
+**I renamed/deleted a workflow — are my snapshots gone?**
+No. Snapshots are keyed by the workflow name at capture time. Use the workflow picker to find and restore them under the old name.
 
 **Can I use this with ComfyUI Manager?**
 Yes — install via ComfyUI Manager or clone the repo into `custom_nodes/`.
