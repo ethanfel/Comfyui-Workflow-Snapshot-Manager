@@ -29,9 +29,9 @@
 - **Toast notifications** — Visual feedback for save, restore, and error operations
 - **SaveSnapshot node** — Trigger snapshot captures from your workflow with a custom node; node snapshots are visually distinct (purple border + "Node" badge) and have their own rolling limit
 - **Change-type icons** — Timeline markers show what kind of change each snapshot represents (node add, remove, connection, parameter, move, mixed) with distinct colored icons — like Fusion 360's operation timeline
-- **Timeline bar** — Optional visual timeline on the canvas showing all snapshots as iconic markers, with a Snapshot button for quick captures
+- **Timeline bar** — Optional centered floating bar on the canvas showing all snapshots as iconic markers, with a Snapshot button for quick captures; tucks behind the sidebar when open
 - **Active & current markers** — When you swap to a snapshot, the timeline highlights where you came from (green dot) and where you are (white ring)
-- **Auto-save before swap** — Swapping to an older snapshot automatically saves your current state first, so you can always get back
+- **Auto-save before swap** — Swapping to an older snapshot automatically saves your current state first, so you can always get back; browsing between saved snapshots skips redundant saves
 - **Ctrl+S shortcut** — Press Ctrl+S (or Cmd+S on Mac) to take a manual snapshot alongside ComfyUI's own save
 - **Lock/pin snapshots** — Protect important snapshots from auto-pruning and "Clear All" with a single click
 - **Concurrency-safe** — Lock guard prevents double-click issues during restore
@@ -98,7 +98,7 @@ This is especially useful for recovering snapshots from workflows that were rena
 
 ### 8. Timeline Bar
 
-Enable the timeline in **Settings > Snapshot Manager > Timeline > Show snapshot timeline on canvas**. A thin bar appears at the bottom of the canvas with an iconic marker for each snapshot — each icon shows what kind of change the snapshot represents:
+Enable the timeline in **Settings > Snapshot Manager > Timeline > Show snapshot timeline on canvas**. A centered floating bar appears at the bottom of the canvas with an iconic marker for each snapshot — each icon shows what kind of change the snapshot represents:
 
 <p align="center">
   <img src="assets/timeline-icons.svg" alt="Timeline change-type icons" width="720"/>
@@ -124,13 +124,13 @@ Additional marker styles are layered on top of the change-type icon:
 | **White ring (larger)** | Active — the snapshot you swapped TO |
 | **Green background** | Current — your auto-saved state before the swap |
 
-Click any marker to swap to that snapshot. Hover to see a tooltip with the snapshot name, time, and change description. The **Snapshot** button on the right takes a quick manual snapshot.
+Click any marker to swap to that snapshot. Hover to see a tooltip with the snapshot name, time, and change description. The **Snapshot** button on the right takes a quick manual snapshot. The bar is centered at 80% width to clear both the sidebar icon strip and bottom-right controls, and tucks behind the sidebar panel when it's open.
 
 The sidebar list also shows the change type in the meta line below each snapshot (e.g., "5 nodes · Parameters changed").
 
 ### 9. Auto-save Before Swap
 
-When you swap to an older snapshot (via the sidebar or timeline), the extension automatically captures a "Current" snapshot of your work-in-progress first. This green-marked snapshot appears on the timeline so you can click it to get back. The marker disappears once you edit the graph (since auto-capture creates a proper snapshot at that point).
+When you swap to an older snapshot (via the sidebar or timeline), the extension automatically captures a "Current" snapshot of your work-in-progress first. This green-marked snapshot appears on the timeline so you can click it to get back. The marker disappears once you edit the graph (since auto-capture creates a proper snapshot at that point). Browsing between existing snapshots does not create additional "Current" entries — the auto-save only triggers on the first swap away from unsaved work.
 
 ### 10. Keyboard Shortcut
 
@@ -180,7 +180,7 @@ All settings are available in **ComfyUI Settings > Snapshot Manager**:
 **Swap with auto-save:**
 
 1. User clicks **Swap** (sidebar or timeline marker)
-2. `captureSnapshot("Current")` saves the current graph state **before** the swap — hash dedup prevents duplicates if nothing changed
+2. If the current graph is unsaved work (not already a swapped snapshot), `captureSnapshot("Current")` saves it **before** the swap — browsing between existing snapshots skips this step
 3. The target snapshot is loaded into the graph
 4. The **timeline** updates: the swapped-to snapshot gets a white ring (active), the auto-saved snapshot gets a green dot (current)
 5. Clicking the green dot swaps back; editing the graph clears both markers (the next auto-capture supersedes them)
