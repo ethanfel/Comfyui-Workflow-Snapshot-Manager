@@ -104,13 +104,24 @@ def get_all_workflow_keys():
     return results
 
 
-def prune(workflow_key, max_snapshots):
-    """Delete oldest unlocked snapshots beyond limit. Returns count deleted."""
+def prune(workflow_key, max_snapshots, source=None):
+    """Delete oldest unlocked snapshots beyond limit. Returns count deleted.
+
+    source filtering:
+      - "node": only prune records where source == "node"
+      - "regular": only prune records where source is absent or not "node"
+      - None: prune all unlocked (existing behavior)
+    """
     records = get_all_for_workflow(workflow_key)
-    unlocked = [r for r in records if not r.get("locked")]
-    if len(unlocked) <= max_snapshots:
+    if source == "node":
+        candidates = [r for r in records if not r.get("locked") and r.get("source") == "node"]
+    elif source == "regular":
+        candidates = [r for r in records if not r.get("locked") and r.get("source") != "node"]
+    else:
+        candidates = [r for r in records if not r.get("locked")]
+    if len(candidates) <= max_snapshots:
         return 0
-    to_delete = unlocked[: len(unlocked) - max_snapshots]
+    to_delete = candidates[: len(candidates) - max_snapshots]
     d = _workflow_dir(workflow_key)
     deleted = 0
     for rec in to_delete:

@@ -22,6 +22,7 @@ let maxSnapshots = 50;
 let debounceMs = 3000;
 let autoCaptureEnabled = true;
 let captureOnLoad = true;
+let maxNodeSnapshots = 5;
 
 // ─── State ───────────────────────────────────────────────────────────
 
@@ -126,7 +127,7 @@ async function pruneSnapshots(workflowKey) {
         const resp = await api.fetchApi("/snapshot-manager/prune", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workflowKey, maxSnapshots }),
+            body: JSON.stringify({ workflowKey, maxSnapshots, source: "regular" }),
         });
         if (!resp.ok) {
             const err = await resp.json();
@@ -134,6 +135,22 @@ async function pruneSnapshots(workflowKey) {
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Prune failed:`, err);
+    }
+}
+
+async function pruneNodeSnapshots(workflowKey) {
+    try {
+        const resp = await api.fetchApi("/snapshot-manager/prune", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflowKey, maxSnapshots: maxNodeSnapshots, source: "node" }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
+    } catch (err) {
+        console.warn(`[${EXTENSION_NAME}] Node prune failed:`, err);
     }
 }
 
@@ -323,6 +340,43 @@ async function captureSnapshot(label = "Auto") {
     }
 
     lastCapturedHashMap.set(workflowKey, hash);
+    pickerDirty = true;
+
+    if (sidebarRefresh) {
+        sidebarRefresh().catch(() => {});
+    }
+    return true;
+}
+
+async function captureNodeSnapshot(label = "Node Trigger") {
+    if (restoreLock) return false;
+
+    const graphData = getGraphData();
+    if (!graphData) return false;
+
+    const nodes = graphData.nodes || [];
+    if (nodes.length === 0) return false;
+
+    const workflowKey = getWorkflowKey();
+
+    const record = {
+        id: generateId(),
+        workflowKey,
+        timestamp: Date.now(),
+        label,
+        nodeCount: nodes.length,
+        graphData,
+        locked: false,
+        source: "node",
+    };
+
+    try {
+        await db_put(record);
+        await pruneNodeSnapshots(workflowKey);
+    } catch {
+        return false;
+    }
+
     pickerDirty = true;
 
     if (sidebarRefresh) {
@@ -565,6 +619,20 @@ const CSS = `
 .snap-footer button:hover {
     background: #dc2626;
     color: #fff;
+}
+.snap-item-node {
+    border-left: 3px solid #6d28d9;
+}
+.snap-node-badge {
+    display: inline-block;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #6d28d9;
+    color: #fff;
+    margin-left: 6px;
+    vertical-align: middle;
+    font-weight: 500;
 }
 .snap-empty {
     padding: 20px;
@@ -922,7 +990,11 @@ async function buildSidebar(el) {
         // newest first
         records.sort((a, b) => b.timestamp - a.timestamp);
 
-        countSpan.textContent = `${records.length} / ${maxSnapshots}`;
+        const regularCount = records.filter(r => r.source !== "node").length;
+        const nodeCount = records.filter(r => r.source === "node").length;
+        countSpan.textContent = nodeCount > 0
+            ? `${regularCount}/${maxSnapshots} + ${nodeCount}/${maxNodeSnapshots} node`
+            : `${regularCount} / ${maxSnapshots}`;
 
         // Update selector label and styling
         selectorLabel.textContent = effKey;
@@ -959,7 +1031,7 @@ async function buildSidebar(el) {
 
         for (const rec of records) {
             const item = document.createElement("div");
-            item.className = "snap-item";
+            item.className = rec.source === "node" ? "snap-item snap-item-node" : "snap-item";
 
             const info = document.createElement("div");
             info.className = "snap-item-info";
@@ -967,6 +1039,12 @@ async function buildSidebar(el) {
             const labelDiv = document.createElement("div");
             labelDiv.className = "snap-item-label";
             labelDiv.textContent = rec.label;
+            if (rec.source === "node") {
+                const badge = document.createElement("span");
+                badge.className = "snap-node-badge";
+                badge.textContent = "Node";
+                labelDiv.appendChild(badge);
+            }
 
             const time = document.createElement("div");
             time.className = "snap-item-time";
@@ -1102,6 +1180,17 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                     captureOnLoad = value;
                 },
             },
+            {
+                id: "SnapshotManager.maxNodeSnapshots",
+                name: "Max node-triggered snapshots per workflow",
+                type: "slider",
+                defaultValue: 5,
+                attrs: { min: 1, max: 50, step: 1 },
+                category: ["Snapshot Manager", "Capture Settings", "Max node-triggered snapshots"],
+                onChange(value) {
+                    maxNodeSnapshots = value;
+                },
+            },
         ],
 
         init() {
@@ -1128,6 +1217,14 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
             // Listen for graph changes (dispatched by ChangeTracker via api)
             api.addEventListener("graphChanged", () => {
                 scheduleCaptureSnapshot();
+            });
+
+            // Listen for node-triggered snapshot captures via WebSocket
+            api.addEventListener("snapshot-manager-capture", (event) => {
+                const label = event.detail?.label || "Node Trigger";
+                captureNodeSnapshot(label).catch((err) => {
+                    console.warn(`[${EXTENSION_NAME}] Node-triggered capture failed:`, err);
+                });
             });
 
             // Listen for workflow switches via Pinia store action

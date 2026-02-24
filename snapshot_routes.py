@@ -84,9 +84,10 @@ async def prune_snapshots(request):
         data = await request.json()
         workflow_key = data.get("workflowKey")
         max_snapshots = data.get("maxSnapshots")
+        source = data.get("source")
         if not workflow_key or max_snapshots is None:
             return web.json_response({"error": "Missing workflowKey or maxSnapshots"}, status=400)
-        deleted = storage.prune(workflow_key, int(max_snapshots))
+        deleted = storage.prune(workflow_key, int(max_snapshots), source=source)
         return web.json_response({"deleted": deleted})
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
