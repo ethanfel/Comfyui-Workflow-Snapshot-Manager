@@ -23,6 +23,7 @@ let debounceMs = 3000;
 let autoCaptureEnabled = true;
 let captureOnLoad = true;
 let maxNodeSnapshots = 5;
+let showTimeline = false;
 
 // ─── State ───────────────────────────────────────────────────────────
 
@@ -32,6 +33,10 @@ let captureTimer = null;
 let sidebarRefresh = null; // callback set by sidebar render
 let viewingWorkflowKey = null; // null = follow active workflow; string = override
 let pickerDirty = true; // forces workflow picker to re-fetch on next expand
+let timelineEl = null;       // root DOM element for timeline bar
+let timelineRefresh = null;  // callback to re-render timeline
+let activeSnapshotId = null;   // ID of the snapshot currently loaded via swap
+let currentSnapshotId = null;  // ID of the auto-saved "Current" snapshot before a swap
 
 // ─── Server API Layer ───────────────────────────────────────────────
 
@@ -266,6 +271,9 @@ async function withRestoreLock(fn) {
             if (sidebarRefresh) {
                 sidebarRefresh().catch(() => {});
             }
+            if (timelineRefresh) {
+                timelineRefresh().catch(() => {});
+            }
         }, RESTORE_GUARD_MS);
     }
 }
@@ -341,11 +349,16 @@ async function captureSnapshot(label = "Auto") {
 
     lastCapturedHashMap.set(workflowKey, hash);
     pickerDirty = true;
+    currentSnapshotId = null;  // new capture supersedes "current" bookmark
+    activeSnapshotId = null;   // graph has changed, no snapshot is "active"
 
     if (sidebarRefresh) {
         sidebarRefresh().catch(() => {});
     }
-    return true;
+    if (timelineRefresh) {
+        timelineRefresh().catch(() => {});
+    }
+    return record.id;
 }
 
 async function captureNodeSnapshot(label = "Node Trigger") {
@@ -378,9 +391,14 @@ async function captureNodeSnapshot(label = "Node Trigger") {
     }
 
     pickerDirty = true;
+    currentSnapshotId = null;
+    activeSnapshotId = null;
 
     if (sidebarRefresh) {
         sidebarRefresh().catch(() => {});
+    }
+    if (timelineRefresh) {
+        timelineRefresh().catch(() => {});
     }
     return true;
 }
@@ -417,6 +435,12 @@ async function restoreSnapshot(record) {
 }
 
 async function swapSnapshot(record) {
+    // Auto-save current state before swapping (so user can get back)
+    const prevCurrentId = currentSnapshotId;
+    const capturedId = await captureSnapshot("Current");
+    // captureSnapshot clears currentSnapshotId; restore or update it
+    currentSnapshotId = capturedId || prevCurrentId;
+
     await withRestoreLock(async () => {
         if (!validateSnapshotData(record.graphData)) {
             showToast("Invalid snapshot data", "error");
@@ -426,6 +450,7 @@ async function swapSnapshot(record) {
             const workflow = app.extensionManager?.workflow?.activeWorkflow;
             await app.loadGraphData(record.graphData, true, true, workflow);
             lastCapturedHashMap.set(getWorkflowKey(), quickHash(JSON.stringify(record.graphData)));
+            activeSnapshotId = record.id;
             showToast("Snapshot swapped", "success");
         } catch (err) {
             console.warn(`[${EXTENSION_NAME}] Swap failed:`, err);
@@ -744,6 +769,86 @@ const CSS = `
 }
 .snap-workflow-viewing-banner button:hover {
     background: rgba(245, 158, 11, 0.2);
+}
+.snap-timeline {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
+    background: rgba(15, 23, 42, 0.85);
+    border-top: 1px solid var(--border-color, #334155);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    z-index: 10;
+    pointer-events: auto;
+}
+.snap-timeline-track {
+    flex: 1;
+    height: 100%;
+    position: relative;
+}
+.snap-timeline-marker {
+    position: absolute;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #3b82f6;
+    transform: translate(-50%, -50%);
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
+    border: 2px solid transparent;
+}
+.snap-timeline-marker:hover {
+    transform: translate(-50%, -50%) scale(1.5);
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+}
+.snap-timeline-marker-node {
+    background: #6d28d9;
+}
+.snap-timeline-marker-node:hover {
+    box-shadow: 0 0 6px rgba(109, 40, 217, 0.6);
+}
+.snap-timeline-marker-locked {
+    border-color: #facc15;
+}
+.snap-timeline-marker-active {
+    border-color: #fff;
+    transform: translate(-50%, -50%) scale(1.3);
+}
+.snap-timeline-marker-active:hover {
+    transform: translate(-50%, -50%) scale(1.5);
+}
+.snap-timeline-marker-current {
+    background: #10b981;
+}
+.snap-timeline-marker-current:hover {
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+}
+.snap-timeline-snap-btn {
+    background: none;
+    border: 1px solid var(--descrip-text, #64748b);
+    color: var(--descrip-text, #94a3b8);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-family: system-ui, sans-serif;
+}
+.snap-timeline-snap-btn:hover {
+    border-color: #3b82f6;
+    color: #3b82f6;
+}
+.snap-timeline-empty {
+    color: var(--descrip-text, #64748b);
+    font-size: 11px;
+    font-family: system-ui, sans-serif;
+    line-height: 32px;
 }
 `;
 
@@ -1131,6 +1236,117 @@ async function buildSidebar(el) {
     await refresh(true);
 }
 
+// ─── Timeline Bar ────────────────────────────────────────────────────
+
+function buildTimeline() {
+    // Guard against duplicate calls
+    if (timelineEl) return;
+
+    injectStyles();
+
+    const canvasParent = app.canvas?.canvas?.parentElement;
+    if (!canvasParent) {
+        console.warn(`[${EXTENSION_NAME}] Cannot build timeline: canvas parent not found`);
+        return;
+    }
+
+    // Ensure parent is positioned so absolute children work
+    const parentPos = getComputedStyle(canvasParent).position;
+    if (parentPos === "static") {
+        canvasParent.style.position = "relative";
+    }
+
+    // Create root element
+    const bar = document.createElement("div");
+    bar.className = "snap-timeline";
+    bar.style.display = showTimeline ? "" : "none";
+
+    const track = document.createElement("div");
+    track.className = "snap-timeline-track";
+
+    const snapBtn = document.createElement("button");
+    snapBtn.className = "snap-timeline-snap-btn";
+    snapBtn.textContent = "Snapshot";
+    snapBtn.title = "Take a manual snapshot (Ctrl+S)";
+    snapBtn.addEventListener("click", async () => {
+        snapBtn.disabled = true;
+        const saved = await captureSnapshot("Manual");
+        if (saved) showToast("Snapshot saved", "success");
+        snapBtn.disabled = false;
+    });
+
+    bar.appendChild(track);
+    bar.appendChild(snapBtn);
+
+    canvasParent.appendChild(bar);
+    timelineEl = bar;
+
+    async function refresh() {
+        if (!showTimeline) return;
+
+        const records = await db_getAllForWorkflow(getWorkflowKey());
+        records.sort((a, b) => a.timestamp - b.timestamp);
+
+        track.innerHTML = "";
+
+        if (records.length === 0) {
+            const empty = document.createElement("span");
+            empty.className = "snap-timeline-empty";
+            empty.textContent = "No snapshots";
+            track.appendChild(empty);
+            return;
+        }
+
+        const minTs = records[0].timestamp;
+        const maxTs = records[records.length - 1].timestamp;
+        const range = maxTs - minTs;
+
+        for (const rec of records) {
+            const marker = document.createElement("div");
+            marker.className = "snap-timeline-marker";
+
+            // Position: spread evenly if all same timestamp, otherwise by time
+            const pct = range > 0
+                ? ((rec.timestamp - minTs) / range) * 100
+                : 50;
+            marker.style.left = `${pct}%`;
+
+            // Node snapshot styling
+            if (rec.source === "node") {
+                marker.classList.add("snap-timeline-marker-node");
+            }
+
+            // Locked snapshot styling
+            if (rec.locked) {
+                marker.classList.add("snap-timeline-marker-locked");
+            }
+
+            // Active snapshot styling (the one swapped TO)
+            if (rec.id === activeSnapshotId) {
+                marker.classList.add("snap-timeline-marker-active");
+            }
+
+            // Current snapshot styling (auto-saved "you were here" bookmark)
+            if (rec.id === currentSnapshotId) {
+                marker.classList.add("snap-timeline-marker-current");
+            }
+
+            // Native tooltip
+            marker.title = `${rec.label} — ${formatTime(rec.timestamp)}`;
+
+            // Click to swap
+            marker.addEventListener("click", () => {
+                swapSnapshot(rec);
+            });
+
+            track.appendChild(marker);
+        }
+    }
+
+    timelineRefresh = refresh;
+    refresh().catch(() => {});
+}
+
 // ─── Extension Registration ──────────────────────────────────────────
 
 if (window.__COMFYUI_FRONTEND_VERSION__) {
@@ -1191,6 +1407,18 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                     maxNodeSnapshots = value;
                 },
             },
+            {
+                id: "SnapshotManager.showTimeline",
+                name: "Show snapshot timeline on canvas",
+                type: "boolean",
+                defaultValue: false,
+                category: ["Snapshot Manager", "Timeline", "Show snapshot timeline on canvas"],
+                onChange(value) {
+                    showTimeline = value;
+                    if (timelineEl) timelineEl.style.display = value ? "" : "none";
+                    if (value && timelineRefresh) timelineRefresh().catch(() => {});
+                },
+            },
         ],
 
         init() {
@@ -1239,13 +1467,31 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                                 captureTimer = null;
                             }
                             viewingWorkflowKey = null;
+                            activeSnapshotId = null;
+                            currentSnapshotId = null;
                             if (sidebarRefresh) {
                                 sidebarRefresh(true).catch(() => {});
+                            }
+                            if (timelineRefresh) {
+                                timelineRefresh().catch(() => {});
                             }
                         });
                     }
                 });
             }
+
+            // Ctrl+S / Cmd+S shortcut for manual snapshot
+            document.addEventListener("keydown", (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+                    captureSnapshot("Manual (Ctrl+S)").then((saved) => {
+                        if (saved) showToast("Snapshot saved", "success");
+                    }).catch(() => {});
+                    // Don't preventDefault — let ComfyUI's own workflow save still fire
+                }
+            });
+
+            // Build the timeline bar on the canvas
+            buildTimeline();
 
             // Capture initial state after a short delay (decoupled from debounceMs)
             setTimeout(() => {
