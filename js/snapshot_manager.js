@@ -1,19 +1,20 @@
 /**
  * ComfyUI Snapshot Manager
  *
- * Automatically captures workflow snapshots as you edit, stores them in
- * IndexedDB, and provides a sidebar panel to browse and restore any
- * previous version.
+ * Automatically captures workflow snapshots as you edit, stores them on the
+ * server as JSON files, and provides a sidebar panel to browse and restore
+ * any previous version.
  */
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const EXTENSION_NAME = "ComfyUI.SnapshotManager";
-const DB_NAME = "ComfySnapshotManager";
-const STORE_NAME = "snapshots";
 const RESTORE_GUARD_MS = 500;
 const INITIAL_CAPTURE_DELAY_MS = 1500;
+const MIGRATE_BATCH_SIZE = 10;
+const OLD_DB_NAME = "ComfySnapshotManager";
+const OLD_STORE_NAME = "snapshots";
 
 // ─── Configurable Settings (updated via ComfyUI settings UI) ────────
 
@@ -31,48 +32,21 @@ let sidebarRefresh = null; // callback set by sidebar render
 let viewingWorkflowKey = null; // null = follow active workflow; string = override
 let pickerDirty = true; // forces workflow picker to re-fetch on next expand
 
-// ─── IndexedDB Layer ─────────────────────────────────────────────────
-
-let dbPromise = null;
-
-function openDB() {
-    if (dbPromise) return dbPromise;
-    dbPromise = new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, 1);
-        req.onupgradeneeded = (e) => {
-            const db = e.target.result;
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                const store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
-                store.createIndex("workflowKey", "workflowKey", { unique: false });
-                store.createIndex("timestamp", "timestamp", { unique: false });
-                store.createIndex("workflowKey_timestamp", ["workflowKey", "timestamp"], { unique: false });
-            }
-        };
-        req.onsuccess = () => {
-            const db = req.result;
-            db.onclose = () => { dbPromise = null; };
-            db.onversionchange = () => { db.close(); dbPromise = null; };
-            resolve(db);
-        };
-        req.onerror = () => {
-            dbPromise = null;
-            reject(req.error);
-        };
-    });
-    return dbPromise;
-}
+// ─── Server API Layer ───────────────────────────────────────────────
 
 async function db_put(record) {
     try {
-        const db = await openDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, "readwrite");
-            tx.objectStore(STORE_NAME).put(record);
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
+        const resp = await api.fetchApi("/snapshot-manager/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ record }),
         });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
     } catch (err) {
-        console.warn(`[${EXTENSION_NAME}] IndexedDB write failed:`, err);
+        console.warn(`[${EXTENSION_NAME}] Save failed:`, err);
         showToast("Failed to save snapshot", "error");
         throw err;
     }
@@ -80,56 +54,54 @@ async function db_put(record) {
 
 async function db_getAllForWorkflow(workflowKey) {
     try {
-        const db = await openDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, "readonly");
-            const idx = tx.objectStore(STORE_NAME).index("workflowKey_timestamp");
-            const range = IDBKeyRange.bound([workflowKey, 0], [workflowKey, Infinity]);
-            const req = idx.getAll(range);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
+        const resp = await api.fetchApi("/snapshot-manager/list", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflowKey }),
         });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
+        return await resp.json();
     } catch (err) {
-        console.warn(`[${EXTENSION_NAME}] IndexedDB read failed:`, err);
+        console.warn(`[${EXTENSION_NAME}] List failed:`, err);
         showToast("Failed to read snapshots", "error");
         return [];
     }
 }
 
-async function db_delete(id) {
+async function db_delete(workflowKey, id) {
     try {
-        const db = await openDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, "readwrite");
-            tx.objectStore(STORE_NAME).delete(id);
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
+        const resp = await api.fetchApi("/snapshot-manager/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflowKey, id }),
         });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
     } catch (err) {
-        console.warn(`[${EXTENSION_NAME}] IndexedDB delete failed:`, err);
+        console.warn(`[${EXTENSION_NAME}] Delete failed:`, err);
         showToast("Failed to delete snapshot", "error");
     }
 }
 
 async function db_deleteAllForWorkflow(workflowKey) {
     try {
-        const records = await db_getAllForWorkflow(workflowKey);
-        const toDelete = records.filter(r => !r.locked);
-        const lockedCount = records.length - toDelete.length;
-        if (toDelete.length === 0) return { lockedCount };
-        const db = await openDB();
-        await new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, "readwrite");
-            const store = tx.objectStore(STORE_NAME);
-            for (const r of toDelete) {
-                store.delete(r.id);
-            }
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
+        const resp = await api.fetchApi("/snapshot-manager/delete-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflowKey }),
         });
-        return { lockedCount };
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
+        return await resp.json();
     } catch (err) {
-        console.warn(`[${EXTENSION_NAME}] IndexedDB bulk delete failed:`, err);
+        console.warn(`[${EXTENSION_NAME}] Bulk delete failed:`, err);
         showToast("Failed to clear snapshots", "error");
         throw err;
     }
@@ -137,52 +109,89 @@ async function db_deleteAllForWorkflow(workflowKey) {
 
 async function db_getAllWorkflowKeys() {
     try {
-        const db = await openDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, "readonly");
-            const idx = tx.objectStore(STORE_NAME).index("workflowKey");
-            const req = idx.openKeyCursor();
-            const counts = new Map();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (cursor) {
-                    counts.set(cursor.key, (counts.get(cursor.key) || 0) + 1);
-                    cursor.continue();
-                } else {
-                    const result = Array.from(counts.entries())
-                        .map(([workflowKey, count]) => ({ workflowKey, count }))
-                        .sort((a, b) => a.workflowKey.localeCompare(b.workflowKey));
-                    resolve(result);
-                }
-            };
-            req.onerror = () => reject(req.error);
-        });
+        const resp = await api.fetchApi("/snapshot-manager/workflows");
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
+        return await resp.json();
     } catch (err) {
-        console.warn(`[${EXTENSION_NAME}] IndexedDB key scan failed:`, err);
+        console.warn(`[${EXTENSION_NAME}] Workflow key scan failed:`, err);
         return [];
     }
 }
 
 async function pruneSnapshots(workflowKey) {
     try {
-        const all = await db_getAllForWorkflow(workflowKey);
-        // Only prune unlocked snapshots; locked ones are protected
-        const unlocked = all.filter(r => !r.locked);
-        if (unlocked.length <= maxSnapshots) return;
-        // sorted ascending by timestamp (index order), oldest first
-        const toDelete = unlocked.slice(0, unlocked.length - maxSnapshots);
-        const db = await openDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, "readwrite");
-            const store = tx.objectStore(STORE_NAME);
-            for (const r of toDelete) {
-                store.delete(r.id);
-            }
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
+        const resp = await api.fetchApi("/snapshot-manager/prune", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflowKey, maxSnapshots }),
         });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
     } catch (err) {
-        console.warn(`[${EXTENSION_NAME}] IndexedDB prune failed:`, err);
+        console.warn(`[${EXTENSION_NAME}] Prune failed:`, err);
+    }
+}
+
+// ─── IndexedDB Migration ────────────────────────────────────────────
+
+async function migrateFromIndexedDB() {
+    try {
+        // Check if the old database exists (databases() not supported in all browsers)
+        if (typeof indexedDB.databases === "function") {
+            const databases = await indexedDB.databases();
+            if (!databases.some((db) => db.name === OLD_DB_NAME)) return;
+        }
+
+        const db = await new Promise((resolve, reject) => {
+            const req = indexedDB.open(OLD_DB_NAME, 1);
+            req.onupgradeneeded = (e) => {
+                // DB didn't exist before — close and clean up
+                e.target.transaction.abort();
+                reject(new Error("no-existing-db"));
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+
+        const allRecords = await new Promise((resolve, reject) => {
+            const tx = db.transaction(OLD_STORE_NAME, "readonly");
+            const req = tx.objectStore(OLD_STORE_NAME).getAll();
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+
+        db.close();
+
+        if (allRecords.length === 0) {
+            indexedDB.deleteDatabase(OLD_DB_NAME);
+            return;
+        }
+
+        // Send in batches
+        let totalImported = 0;
+        for (let i = 0; i < allRecords.length; i += MIGRATE_BATCH_SIZE) {
+            const batch = allRecords.slice(i, i + MIGRATE_BATCH_SIZE);
+            const resp = await api.fetchApi("/snapshot-manager/migrate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ records: batch }),
+            });
+            if (!resp.ok) throw new Error("Migration batch failed");
+            const result = await resp.json();
+            totalImported += result.imported;
+        }
+
+        // Success — delete old database
+        indexedDB.deleteDatabase(OLD_DB_NAME);
+        console.log(`[${EXTENSION_NAME}] Migrated ${totalImported} snapshots from IndexedDB to server`);
+    } catch (err) {
+        if (err.message === "no-existing-db") return;
+        console.warn(`[${EXTENSION_NAME}] IndexedDB migration failed (old data preserved):`, err);
     }
 }
 
@@ -1016,7 +1025,7 @@ async function buildSidebar(el) {
                     const confirmed = await showConfirmDialog("This snapshot is locked. Delete anyway?");
                     if (!confirmed) return;
                 }
-                await db_delete(rec.id);
+                await db_delete(rec.workflowKey, rec.id);
                 pickerDirty = true;
                 await refresh();
             });
@@ -1113,6 +1122,9 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
         },
 
         async setup() {
+            // Migrate old IndexedDB data to server on first load
+            await migrateFromIndexedDB();
+
             // Listen for graph changes (dispatched by ChangeTracker via api)
             api.addEventListener("graphChanged", () => {
                 scheduleCaptureSnapshot();

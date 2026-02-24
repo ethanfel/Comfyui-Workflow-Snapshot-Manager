@@ -5,13 +5,13 @@
 <p align="center">
   <a href="https://registry.comfy.org/publishers/ethanfel/nodes/comfyui-snapshot-manager"><img src="https://img.shields.io/badge/ComfyUI-Registry-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=" alt="ComfyUI Registry"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/></a>
-  <img src="https://img.shields.io/badge/version-1.1.1-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-2.0.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/ComfyUI-Extension-purple" alt="ComfyUI Extension"/>
 </p>
 
 ---
 
-**Workflow Snapshot Manager** automatically captures your ComfyUI workflow as you edit. Browse, name, search, and restore any previous version from a sidebar panel — all stored locally in your browser's IndexedDB.
+**Workflow Snapshot Manager** automatically captures your ComfyUI workflow as you edit. Browse, name, search, and restore any previous version from a sidebar panel — stored as JSON files on the server, accessible from any browser.
 
 <p align="center">
   <img src="assets/sidebar-preview.png" alt="Sidebar Preview" width="300"/>
@@ -29,7 +29,8 @@
 - **Toast notifications** — Visual feedback for save, restore, and error operations
 - **Lock/pin snapshots** — Protect important snapshots from auto-pruning and "Clear All" with a single click
 - **Concurrency-safe** — Lock guard prevents double-click issues during restore
-- **Zero backend** — Pure frontend extension, no server dependencies
+- **Server-side storage** — Snapshots persist on the ComfyUI server's filesystem, accessible from any browser
+- **Automatic migration** — Existing IndexedDB snapshots are imported to the server on first load
 
 ## Installation
 
@@ -116,16 +117,19 @@ All settings are available in **ComfyUI Settings > Snapshot Manager > Capture Se
 1. **Graph edits** trigger a `graphChanged` event
 2. A **debounce timer** prevents excessive writes
 3. The workflow is serialized and **hash-checked** against the last capture (per-workflow) to avoid duplicates
-4. New snapshots are written to **IndexedDB** (browser-local, persistent)
-5. The **sidebar panel** reads from IndexedDB and renders the snapshot list
+4. New snapshots are sent to the **server** and stored as individual JSON files under `data/snapshots/`
+5. The **sidebar panel** fetches snapshots from the server and renders the snapshot list
 6. **Restore/Swap** loads graph data back into ComfyUI with a lock guard to prevent concurrent operations
 
-**Storage:** All data stays in your browser's IndexedDB — nothing is sent to any server. Snapshots persist across browser sessions and ComfyUI restarts.
+**Storage:** Snapshots are stored as JSON files on the server at `<extension_dir>/data/snapshots/<workflow_key>/<id>.json`. They persist across browser sessions, ComfyUI restarts, and are accessible from any browser connecting to the same server.
 
 ## FAQ
 
 **Where are snapshots stored?**
-In your browser's IndexedDB under the database `ComfySnapshotManager`. They persist across sessions but are browser-local (not synced between devices).
+On the server's filesystem under `<extension_dir>/data/snapshots/`. Each workflow gets its own directory, and each snapshot is an individual JSON file. They persist across browser sessions and are accessible from any browser connecting to the same ComfyUI server.
+
+**I'm upgrading from v1.x — what happens to my existing snapshots?**
+On first load after upgrading, the extension automatically migrates all snapshots from your browser's IndexedDB to the server. Once migration succeeds, the old IndexedDB database is deleted. If migration fails (e.g., server unreachable), your old data is preserved and migration will retry on the next load.
 
 **Will this slow down ComfyUI?**
 No. Snapshots are captured asynchronously after a debounce delay. The hash check prevents redundant writes.
