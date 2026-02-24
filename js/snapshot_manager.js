@@ -1413,14 +1413,10 @@ function buildTimeline() {
         return;
     }
 
-    // Ensure parent is positioned so absolute children work, and
-    // sits above the ComfyUI sidebar (z-index: 10) in the stacking order
+    // Ensure parent is positioned so absolute children work
     const parentPos = getComputedStyle(canvasParent).position;
     if (parentPos === "static") {
         canvasParent.style.position = "relative";
-    }
-    if (!canvasParent.style.zIndex) {
-        canvasParent.style.zIndex = "20";
     }
 
     // Create root element
