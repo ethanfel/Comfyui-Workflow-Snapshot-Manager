@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://registry.comfy.org/publishers/ethanfel/nodes/comfyui-snapshot-manager"><img src="https://img.shields.io/badge/ComfyUI-Registry-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=" alt="ComfyUI Registry"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/></a>
-  <img src="https://img.shields.io/badge/version-2.0.0-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-2.1.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/ComfyUI-Extension-purple" alt="ComfyUI Extension"/>
 </p>
 
@@ -27,6 +27,7 @@
 - **Per-workflow storage** — Each workflow has its own independent snapshot history
 - **Theme-aware UI** — Adapts to light and dark ComfyUI themes
 - **Toast notifications** — Visual feedback for save, restore, and error operations
+- **SaveSnapshot node** — Trigger snapshot captures from your workflow with a custom node; node snapshots are visually distinct (purple border + "Node" badge) and have their own rolling limit
 - **Lock/pin snapshots** — Protect important snapshots from auto-pruning and "Clear All" with a single click
 - **Concurrency-safe** — Lock guard prevents double-click issues during restore
 - **Server-side storage** — Snapshots persist on the ComfyUI server's filesystem, accessible from any browser
@@ -105,6 +106,7 @@ All settings are available in **ComfyUI Settings > Snapshot Manager > Capture Se
 | **Capture delay** | Slider | `3s` | Seconds to wait after the last edit before auto-capturing (1–30s) |
 | **Max snapshots per workflow** | Slider | `50` | Maximum number of unlocked snapshots kept per workflow (5–200). Oldest unlocked are pruned automatically; locked snapshots are never pruned |
 | **Capture on workflow load** | Toggle | `On` | Save an "Initial" snapshot when a workflow is first loaded |
+| **Max node-triggered snapshots** | Slider | `5` | Rolling limit for SaveSnapshot node captures per workflow (1–50). Node snapshots are pruned independently from auto/manual snapshots |
 
 ## Architecture
 
@@ -112,7 +114,7 @@ All settings are available in **ComfyUI Settings > Snapshot Manager > Capture Se
   <img src="assets/architecture.png" alt="Architecture Diagram" width="100%"/>
 </p>
 
-**Data flow:**
+**Auto/manual capture flow:**
 
 1. **Graph edits** trigger a `graphChanged` event
 2. A **debounce timer** prevents excessive writes
@@ -120,6 +122,13 @@ All settings are available in **ComfyUI Settings > Snapshot Manager > Capture Se
 4. New snapshots are sent to the **server** and stored as individual JSON files under `data/snapshots/`
 5. The **sidebar panel** fetches snapshots from the server and renders the snapshot list
 6. **Restore/Swap** loads graph data back into ComfyUI with a lock guard to prevent concurrent operations
+
+**Node-triggered capture flow:**
+
+1. **SaveSnapshot node** executes during a queue prompt run
+2. A **WebSocket event** is sent to the frontend, **skipping hash dedup** (the workflow doesn't change between runs)
+3. The snapshot is saved with `source: "node"` and pruned against its own rolling limit (`maxNodeSnapshots`)
+4. Node snapshots appear in the sidebar with a **purple left border** and **"Node" badge**
 
 **Storage:** Snapshots are stored as JSON files on the server at `<extension_dir>/data/snapshots/<workflow_key>/<id>.json`. They persist across browser sessions, ComfyUI restarts, and are accessible from any browser connecting to the same server.
 
