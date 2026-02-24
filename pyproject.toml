@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-snapshot-manager"
 description = "Automatically snapshots workflow state with a sidebar to browse and restore previous versions."
-version = "2.1.0"
+version = "2.3.0"
 license = {text = "MIT"}
 
 [project.urls]
