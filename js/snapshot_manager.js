@@ -369,7 +369,7 @@ async function swapSnapshot(record) {
             return;
         }
         try {
-            const workflow = app.workflowManager?.activeWorkflow;
+            const workflow = app.extensionManager?.workflow?.activeWorkflow;
             await app.loadGraphData(record.graphData, true, true, workflow);
             lastCapturedHashMap.set(getWorkflowKey(), quickHash(JSON.stringify(record.graphData)));
             showToast("Snapshot swapped", "success");
