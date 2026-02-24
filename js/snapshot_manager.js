@@ -882,12 +882,13 @@ const CSS = `
 }
 .snap-timeline {
     position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    bottom: 4px;
+    left: 10%;
+    right: 10%;
     height: 32px;
     background: rgba(15, 23, 42, 0.85);
-    border-top: 1px solid var(--border-color, #334155);
+    border: 1px solid var(--border-color, #334155);
+    border-radius: 8px;
     display: flex;
     align-items: center;
     padding: 0 16px;
@@ -1440,16 +1441,6 @@ function buildTimeline() {
 
     bar.appendChild(track);
     bar.appendChild(snapBtn);
-
-    // Offset timeline to avoid floating sidebar overlap
-    const leftToolbar = document.querySelector(".comfyui-body-left .side-tool-bar-container");
-    const rightToolbar = document.querySelector(".comfyui-body-right .side-tool-bar-container");
-    if (leftToolbar && !leftToolbar.classList.contains("connected-sidebar")) {
-        bar.style.paddingLeft = "calc(var(--sidebar-width, 48px) + 16px)";
-    }
-    if (rightToolbar && !rightToolbar.classList.contains("connected-sidebar")) {
-        bar.style.paddingRight = "calc(var(--sidebar-width, 48px) + 16px)";
-    }
 
     canvasParent.appendChild(bar);
     timelineEl = bar;
