@@ -1,0 +1,13 @@
+[project]
+name = "comfyui-snapshot-manager"
+description = "Automatically snapshots workflow state with a sidebar to browse and restore previous versions."
+version = "1.0.0"
+license = {text = "MIT"}
+
+[project.urls]
+Repository = "https://github.com/ethanfel/Comfyui-Workflow-Snapshot-Manager"
+
+[tool.comfy]
+PublisherId = "ethanfel"
+DisplayName = "Workflow Snapshot Manager"
+Icon = ""

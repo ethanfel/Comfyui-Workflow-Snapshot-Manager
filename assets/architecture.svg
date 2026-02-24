@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420">
+  <defs>
+    <linearGradient id="abg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="100%" style="stop-color:#1e293b"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="420" rx="12" fill="url(#abg)"/>
+
+  <!-- Title -->
+  <text x="400" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#94a3b8">How It Works</text>
+
+  <!-- Graph Edit box -->
+  <rect x="40" y="60" width="160" height="70" rx="8" fill="#1e293b" stroke="#3b82f6" stroke-width="2"/>
+  <text x="120" y="92" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#e2e8f0">Graph Edit</text>
+  <text x="120" y="112" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#64748b">graphChanged event</text>
+
+  <!-- Arrow 1 -->
+  <line x1="200" y1="95" x2="250" y2="95" stroke="#475569" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Debounce box -->
+  <rect x="250" y="60" width="160" height="70" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="2"/>
+  <text x="330" y="92" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#e2e8f0">Debounce Timer</text>
+  <text x="330" y="112" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#64748b">configurable delay</text>
+
+  <!-- Arrow 2 -->
+  <line x1="410" y1="95" x2="460" y2="95" stroke="#475569" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Hash Check box -->
+  <rect x="460" y="60" width="160" height="70" rx="8" fill="#1e293b" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="540" y="92" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#e2e8f0">Hash Check</text>
+  <text x="540" y="112" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#64748b">per-workflow map</text>
+
+  <!-- Arrow 3 -->
+  <line x1="620" y1="95" x2="640" y2="95" stroke="#475569" stroke-width="2"/>
+  <line x1="640" y1="95" x2="640" y2="180" stroke="#475569" stroke-width="2"/>
+  <line x1="640" y1="180" x2="620" y2="180" stroke="#475569" stroke-width="2" marker-end="url(#arrowhead-left)"/>
+
+  <!-- IndexedDB box -->
+  <rect x="460" y="150" width="160" height="70" rx="8" fill="#1e293b" stroke="#22c55e" stroke-width="2"/>
+  <text x="540" y="182" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#e2e8f0">IndexedDB</text>
+  <text x="540" y="202" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#64748b">persistent storage</text>
+
+  <!-- Arrow 4 down to sidebar -->
+  <line x1="540" y1="220" x2="540" y2="265" stroke="#475569" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Sidebar Panel box (wide) -->
+  <rect x="250" y="265" width="370" height="130" rx="8" fill="#1e293b" stroke="#3b82f6" stroke-width="2"/>
+  <text x="435" y="295" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#e2e8f0">Sidebar Panel</text>
+
+  <!-- Sidebar sub-items -->
+  <rect x="270" y="310" width="100" height="32" rx="5" fill="#3b82f6" opacity="0.15" stroke="#3b82f6" stroke-width="1"/>
+  <text x="320" y="330" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#93c5fd">Take Snapshot</text>
+
+  <rect x="380" y="310" width="70" height="32" rx="5" fill="#22c55e" opacity="0.15" stroke="#22c55e" stroke-width="1"/>
+  <text x="415" y="330" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#86efac">Restore</text>
+
+  <rect x="460" y="310" width="55" height="32" rx="5" fill="#f59e0b" opacity="0.15" stroke="#f59e0b" stroke-width="1"/>
+  <text x="488" y="330" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#fcd34d">Swap</text>
+
+  <rect x="525" y="310" width="70" height="32" rx="5" fill="#8b5cf6" opacity="0.15" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="560" y="330" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#c4b5fd">Search</text>
+
+  <text x="435" y="375" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#64748b">toast notifications &#183; confirm dialogs &#183; loading states</text>
+
+  <!-- Restore arrow back up -->
+  <rect x="40" y="180" width="160" height="70" rx="8" fill="#1e293b" stroke="#22c55e" stroke-width="2"/>
+  <text x="120" y="207" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#e2e8f0">Restore / Swap</text>
+  <text x="120" y="227" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#64748b">with lock guard</text>
+
+  <line x1="250" y1="330" x2="200" y2="265" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrowhead-green)"/>
+  <line x1="120" y1="180" x2="120" y2="130" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrowhead-green)"/>
+  <text x="120" y="155" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#22c55e">loadGraphData</text>
+
+  <!-- Manual capture arrow -->
+  <line x1="320" y1="310" x2="460" y2="185" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrowhead-blue)"/>
+
+  <!-- Arrowhead markers -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#475569"/>
+    </marker>
+    <marker id="arrowhead-left" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto-start-reverse">
+      <polygon points="10 0, 0 3.5, 10 7" fill="#475569"/>
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22c55e"/>
+    </marker>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6"/>
+    </marker>
+  </defs>
+</svg>

@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 520">
+  <defs>
+    <linearGradient id="sbg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e1e1e"/>
+      <stop offset="100%" style="stop-color:#252525"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Panel background -->
+  <rect width="300" height="520" rx="10" fill="url(#sbg)" stroke="#333" stroke-width="1"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="300" height="50" rx="10 10 0 0" fill="#1a1a1a"/>
+  <rect x="12" y="12" width="120" height="28" rx="5" fill="#3b82f6"/>
+  <text x="72" y="31" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#fff">Take Snapshot</text>
+  <text x="265" y="31" text-anchor="end" font-family="system-ui, sans-serif" font-size="11" fill="#888">5 / 50</text>
+
+  <!-- Separator -->
+  <line x1="0" y1="50" x2="300" y2="50" stroke="#444"/>
+
+  <!-- Search bar -->
+  <rect x="12" y="58" width="252" height="30" rx="5" fill="#2a2a2a" stroke="#444" stroke-width="1"/>
+  <text x="24" y="78" font-family="system-ui, sans-serif" font-size="12" fill="#666">Filter snapshots...</text>
+  <text x="252" y="78" font-family="system-ui, sans-serif" font-size="13" fill="#666"></text>
+
+  <!-- Separator -->
+  <line x1="0" y1="96" x2="300" y2="96" stroke="#444"/>
+
+  <!-- Snapshot item 1 -->
+  <rect x="0" y="97" width="300" height="80" fill="#1e1e1e"/>
+  <text x="12" y="118" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#ddd">Checkpoint before merge</text>
+  <text x="12" y="136" font-family="system-ui, sans-serif" font-size="12" fill="#ddd">2:34:15 PM</text>
+  <text x="12" y="150" font-family="system-ui, sans-serif" font-size="10" fill="#777">Jan 5, 2026</text>
+  <text x="12" y="164" font-family="system-ui, sans-serif" font-size="10" fill="#666">42 nodes</text>
+
+  <!-- Action buttons row 1 -->
+  <rect x="180" y="112" width="42" height="22" rx="3" fill="#f59e0b"/>
+  <text x="201" y="127" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#fff">Swap</text>
+  <rect x="226" y="112" width="52" height="22" rx="3" fill="#22c55e"/>
+  <text x="252" y="127" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#fff">Restore</text>
+  <rect x="282" y="112" width="5" height="22" rx="2" fill="#444"/>
+
+  <line x1="0" y1="177" x2="300" y2="177" stroke="#333"/>
+
+  <!-- Snapshot item 2 -->
+  <rect x="0" y="178" width="300" height="80" fill="#1e1e1e"/>
+  <text x="12" y="199" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#ddd">Auto</text>
+  <text x="12" y="217" font-family="system-ui, sans-serif" font-size="12" fill="#ddd">2:31:02 PM</text>
+  <text x="12" y="231" font-family="system-ui, sans-serif" font-size="10" fill="#777">Jan 5, 2026</text>
+  <text x="12" y="245" font-family="system-ui, sans-serif" font-size="10" fill="#666">40 nodes</text>
+
+  <rect x="180" y="193" width="42" height="22" rx="3" fill="#f59e0b"/>
+  <text x="201" y="208" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#fff">Swap</text>
+  <rect x="226" y="193" width="52" height="22" rx="3" fill="#22c55e"/>
+  <text x="252" y="208" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#fff">Restore</text>
+
+  <line x1="0" y1="258" x2="300" y2="258" stroke="#333"/>
+
+  <!-- Snapshot item 3 -->
+  <rect x="0" y="259" width="300" height="80" fill="#1e1e1e"/>
+  <text x="12" y="280" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#ddd">Before KSampler change</text>
+  <text x="12" y="298" font-family="system-ui, sans-serif" font-size="12" fill="#ddd">2:28:44 PM</text>
+  <text x="12" y="312" font-family="system-ui, sans-serif" font-size="10" fill="#777">Jan 5, 2026</text>
+  <text x="12" y="326" font-family="system-ui, sans-serif" font-size="10" fill="#666">38 nodes</text>
+
+  <rect x="180" y="274" width="42" height="22" rx="3" fill="#f59e0b"/>
+  <text x="201" y="289" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#fff">Swap</text>
+  <rect x="226" y="274" width="52" height="22" rx="3" fill="#22c55e"/>
+  <text x="252" y="289" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#fff">Restore</text>
+
+  <line x1="0" y1="339" x2="300" y2="339" stroke="#333"/>
+
+  <!-- Snapshot item 4 -->
+  <rect x="0" y="340" width="300" height="80" fill="#1e1e1e"/>
+  <text x="12" y="361" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#ddd">Initial</text>
+  <text x="12" y="379" font-family="system-ui, sans-serif" font-size="12" fill="#ddd">2:15:30 PM</text>
+  <text x="12" y="393" font-family="system-ui, sans-serif" font-size="10" fill="#777">Jan 5, 2026</text>
+  <text x="12" y="407" font-family="system-ui, sans-serif" font-size="10" fill="#666">35 nodes</text>
+
+  <rect x="180" y="355" width="42" height="22" rx="3" fill="#f59e0b"/>
+  <text x="201" y="370" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#fff">Swap</text>
+  <rect x="226" y="355" width="52" height="22" rx="3" fill="#22c55e"/>
+  <text x="252" y="370" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#fff">Restore</text>
+
+  <line x1="0" y1="420" x2="300" y2="420" stroke="#333"/>
+
+  <!-- Empty space -->
+  <rect x="0" y="421" width="300" height="57" fill="transparent"/>
+
+  <!-- Footer -->
+  <line x1="0" y1="478" x2="300" y2="478" stroke="#444"/>
+  <rect x="12" y="486" width="276" height="26" rx="5" fill="#555"/>
+  <text x="150" y="504" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#ccc">Clear All Snapshots</text>
+</svg>

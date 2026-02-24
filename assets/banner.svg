@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 200">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <rect width="840" height="200" rx="12" fill="url(#bg)"/>
+  <rect x="0" y="192" width="840" height="8" rx="0 0 12 12" fill="url(#accent)"/>
+
+  <!-- Clock/History icon -->
+  <circle cx="100" cy="100" r="40" fill="none" stroke="#3b82f6" stroke-width="3"/>
+  <line x1="100" y1="70" x2="100" y2="100" stroke="#3b82f6" stroke-width="3" stroke-linecap="round"/>
+  <line x1="100" y1="100" x2="120" y2="110" stroke="#3b82f6" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 65 72 A 40 40 0 0 0 60 100" fill="none" stroke="#8b5cf6" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="58,68 68,76 64,64" fill="#8b5cf6"/>
+
+  <!-- Title -->
+  <text x="170" y="85" font-family="system-ui, -apple-system, sans-serif" font-size="32" font-weight="700" fill="#e2e8f0">Workflow Snapshot Manager</text>
+  <text x="170" y="120" font-family="system-ui, -apple-system, sans-serif" font-size="16" fill="#94a3b8">Auto-capture, browse, name, and restore workflow snapshots</text>
+  <text x="170" y="150" font-family="system-ui, -apple-system, sans-serif" font-size="13" fill="#64748b">ComfyUI Extension</text>
+
+  <!-- Decorative dots -->
+  <circle cx="750" cy="50" r="3" fill="#3b82f6" opacity="0.4"/>
+  <circle cx="770" cy="70" r="2" fill="#8b5cf6" opacity="0.3"/>
+  <circle cx="790" cy="45" r="2.5" fill="#22c55e" opacity="0.3"/>
+  <circle cx="760" cy="90" r="2" fill="#f59e0b" opacity="0.3"/>
+</svg>
