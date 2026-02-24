@@ -264,29 +264,47 @@ function detectChangeType(prevGraph, currGraph) {
 
     const prevNodes = prevGraph.nodes || [];
     const currNodes = currGraph.nodes || [];
-    const prevIds = new Set(prevNodes.map(n => n.id));
-    const currIds = new Set(currNodes.map(n => n.id));
 
-    const added = currNodes.filter(n => !prevIds.has(n.id));
-    const removed = prevNodes.filter(n => !currIds.has(n.id));
-    const nodesChanged = added.length > 0 || removed.length > 0;
-
-    // When nodes are added/removed, link changes are expected — don't flag separately
-    if (nodesChanged) {
-        if (added.length > 0 && removed.length > 0) return "mixed";
-        return added.length > 0 ? "node_add" : "node_remove";
+    // Quick length check before building Sets
+    if (prevNodes.length !== currNodes.length) {
+        return prevNodes.length < currNodes.length ? "node_add" : "node_remove";
     }
 
-    // Node sets identical — check links, params, positions
+    const prevIds = new Set(prevNodes.map(n => n.id));
+    let hasAdded = false;
+    let hasRemoved = false;
+    for (let i = 0; i < currNodes.length; i++) {
+        if (!prevIds.has(currNodes[i].id)) { hasAdded = true; break; }
+    }
+    if (hasAdded) {
+        // Same length but different IDs → both add and remove
+        return "mixed";
+    }
+
+    // Node sets identical (same length, all curr IDs exist in prev)
+    // — check links, params, positions with early exits
     let flags = 0;
     const FLAG_CONNECTION = 1;
     const FLAG_PARAM = 2;
     const FLAG_MOVE = 4;
+    const ALL_FLAGS = FLAG_CONNECTION | FLAG_PARAM | FLAG_MOVE;
 
-    // Compare links
-    const prevLinks = JSON.stringify(prevGraph.links || []);
-    const currLinks = JSON.stringify(currGraph.links || []);
-    if (prevLinks !== currLinks) flags |= FLAG_CONNECTION;
+    // Compare links — check length first to avoid stringify when possible
+    const prevLinks = prevGraph.links || [];
+    const currLinks = currGraph.links || [];
+    if (prevLinks.length !== currLinks.length) {
+        flags |= FLAG_CONNECTION;
+    } else if (prevLinks.length > 0) {
+        // Same length — spot-check first/last before full stringify
+        const pFirst = prevLinks[0], cFirst = currLinks[0];
+        const pLast = prevLinks[prevLinks.length - 1], cLast = currLinks[currLinks.length - 1];
+        if (pFirst?.[0] !== cFirst?.[0] || pFirst?.[1] !== cFirst?.[1]
+            || pLast?.[0] !== cLast?.[0] || pLast?.[1] !== cLast?.[1]) {
+            flags |= FLAG_CONNECTION;
+        } else if (JSON.stringify(prevLinks) !== JSON.stringify(currLinks)) {
+            flags |= FLAG_CONNECTION;
+        }
+    }
 
     // Build lookup for prev nodes by id
     const prevNodeMap = new Map(prevNodes.map(n => [n.id, n]));
@@ -295,18 +313,31 @@ function detectChangeType(prevGraph, currGraph) {
         const pn = prevNodeMap.get(cn.id);
         if (!pn) continue;
 
-        // Compare widget values
-        const cw = JSON.stringify(cn.widgets_values ?? null);
-        const pw = JSON.stringify(pn.widgets_values ?? null);
-        if (cw !== pw) flags |= FLAG_PARAM;
+        // Compare widget values — cheap ref/length check before stringify
+        if (!(flags & FLAG_PARAM)) {
+            const cw = cn.widgets_values;
+            const pw = pn.widgets_values;
+            if (cw !== pw) {
+                if (cw == null || pw == null
+                    || !Array.isArray(cw) || !Array.isArray(pw)
+                    || cw.length !== pw.length) {
+                    flags |= FLAG_PARAM;
+                } else {
+                    // Same-length arrays — compare elements directly
+                    for (let i = 0; i < cw.length; i++) {
+                        if (cw[i] !== pw[i]) { flags |= FLAG_PARAM; break; }
+                    }
+                }
+            }
+        }
 
         // Compare positions
-        const cPos = Array.isArray(cn.pos) ? cn.pos : [0, 0];
-        const pPos = Array.isArray(pn.pos) ? pn.pos : [0, 0];
-        if (cPos[0] !== pPos[0] || cPos[1] !== pPos[1]) flags |= FLAG_MOVE;
+        if (!(flags & FLAG_MOVE)) {
+            const cp = cn.pos, pp = pn.pos;
+            if (cp?.[0] !== pp?.[0] || cp?.[1] !== pp?.[1]) flags |= FLAG_MOVE;
+        }
 
-        // Early exit if all flags set
-        if (flags === (FLAG_CONNECTION | FLAG_PARAM | FLAG_MOVE)) break;
+        if (flags === ALL_FLAGS) break;
     }
 
     if (flags === 0) return "unknown";
