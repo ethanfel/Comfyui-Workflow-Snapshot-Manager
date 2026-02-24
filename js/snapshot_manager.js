@@ -199,7 +199,7 @@ function quickHash(str) {
 function getWorkflowKey() {
     try {
         const wf = app.workflowManager?.activeWorkflow;
-        return wf?.name || wf?.path || "default";
+        return wf?.key || wf?.filename || wf?.path || "default";
     } catch {
         return "default";
     }
