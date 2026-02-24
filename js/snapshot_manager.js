@@ -207,7 +207,7 @@ function quickHash(str) {
 
 function getWorkflowKey() {
     try {
-        const wf = app.workflowManager?.activeWorkflow;
+        const wf = app.extensionManager?.workflow?.activeWorkflow;
         return wf?.key || wf?.filename || wf?.path || "default";
     } catch {
         return "default";
@@ -1130,17 +1130,22 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                 scheduleCaptureSnapshot();
             });
 
-            // Listen for workflow switches
-            if (app.workflowManager) {
-                app.workflowManager.addEventListener("changeWorkflow", () => {
-                    // Cancel any pending capture from the previous workflow
-                    if (captureTimer) {
-                        clearTimeout(captureTimer);
-                        captureTimer = null;
-                    }
-                    viewingWorkflowKey = null;
-                    if (sidebarRefresh) {
-                        sidebarRefresh(true).catch(() => {});
+            // Listen for workflow switches via Pinia store action
+            const workflowStore = app.extensionManager?.workflow;
+            if (workflowStore?.$onAction) {
+                workflowStore.$onAction(({ name, after }) => {
+                    if (name === "openWorkflow") {
+                        after(() => {
+                            // Cancel any pending capture from the previous workflow
+                            if (captureTimer) {
+                                clearTimeout(captureTimer);
+                                captureTimer = null;
+                            }
+                            viewingWorkflowKey = null;
+                            if (sidebarRefresh) {
+                                sidebarRefresh(true).catch(() => {});
+                            }
+                        });
                     }
                 });
             }
