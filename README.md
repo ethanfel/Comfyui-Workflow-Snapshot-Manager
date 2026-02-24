@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://registry.comfy.org/publishers/ethanfel/nodes/comfyui-snapshot-manager"><img src="https://img.shields.io/badge/ComfyUI-Registry-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=" alt="ComfyUI Registry"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/></a>
-  <img src="https://img.shields.io/badge/version-2.2.0-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-2.3.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/ComfyUI-Extension-purple" alt="ComfyUI Extension"/>
 </p>
 
@@ -28,7 +28,8 @@
 - **Theme-aware UI** — Adapts to light and dark ComfyUI themes
 - **Toast notifications** — Visual feedback for save, restore, and error operations
 - **SaveSnapshot node** — Trigger snapshot captures from your workflow with a custom node; node snapshots are visually distinct (purple border + "Node" badge) and have their own rolling limit
-- **Timeline bar** — Optional visual timeline on the canvas showing all snapshots as dots, with a Snapshot button for quick captures
+- **Change-type icons** — Timeline markers show what kind of change each snapshot represents (node add, remove, connection, parameter, move, mixed) with distinct colored icons — like Fusion 360's operation timeline
+- **Timeline bar** — Optional visual timeline on the canvas showing all snapshots as iconic markers, with a Snapshot button for quick captures
 - **Active & current markers** — When you swap to a snapshot, the timeline highlights where you came from (green dot) and where you are (white ring)
 - **Auto-save before swap** — Swapping to an older snapshot automatically saves your current state first, so you can always get back
 - **Ctrl+S shortcut** — Press Ctrl+S (or Cmd+S on Mac) to take a manual snapshot alongside ComfyUI's own save
@@ -97,17 +98,35 @@ This is especially useful for recovering snapshots from workflows that were rena
 
 ### 8. Timeline Bar
 
-Enable the timeline in **Settings > Snapshot Manager > Timeline > Show snapshot timeline on canvas**. A thin bar appears at the bottom of the canvas with a dot for each snapshot:
+Enable the timeline in **Settings > Snapshot Manager > Timeline > Show snapshot timeline on canvas**. A thin bar appears at the bottom of the canvas with an iconic marker for each snapshot — each icon shows what kind of change the snapshot represents:
 
-| Marker | Meaning |
-|--------|---------|
-| **Blue dot** | Regular snapshot |
-| **Purple dot** | Node-triggered snapshot |
+<p align="center">
+  <img src="assets/timeline-icons.svg" alt="Timeline change-type icons" width="720"/>
+</p>
+
+| Icon | Color | Change Type |
+|------|-------|-------------|
+| Filled circle | Blue | **Initial** — first snapshot after load |
+| Plus **+** | Green | **Node Add** — nodes were added |
+| Minus **−** | Red | **Node Remove** — nodes were removed |
+| Zigzag | Amber | **Connection** — links/wires changed |
+| Wave | Purple | **Param** — widget values changed |
+| Arrows ↕ | Gray | **Move** — nodes repositioned |
+| Star ✱ | Orange | **Mixed** — multiple change types |
+| Faded dot | Gray | **Unknown** — legacy snapshot or no detected change |
+
+Additional marker styles are layered on top of the change-type icon:
+
+| Overlay | Meaning |
+|---------|---------|
+| **Purple background** | Node-triggered snapshot (overrides change-type color) |
 | **Yellow border** | Locked snapshot |
 | **White ring (larger)** | Active — the snapshot you swapped TO |
-| **Green dot** | Current — your auto-saved state before the swap |
+| **Green background** | Current — your auto-saved state before the swap |
 
-Click any dot to swap to that snapshot. The **Snapshot** button on the right side of the bar takes a quick manual snapshot.
+Click any marker to swap to that snapshot. Hover to see a tooltip with the snapshot name, time, and change description. The **Snapshot** button on the right takes a quick manual snapshot.
+
+The sidebar list also shows the change type in the meta line below each snapshot (e.g., "5 nodes · Parameters changed").
 
 ### 9. Auto-save Before Swap
 
@@ -146,9 +165,10 @@ All settings are available in **ComfyUI Settings > Snapshot Manager**:
 1. **Graph edits** trigger a `graphChanged` event
 2. A **debounce timer** prevents excessive writes
 3. The workflow is serialized and **hash-checked** against the last capture (per-workflow) to avoid duplicates
-4. New snapshots are sent to the **server** and stored as individual JSON files under `data/snapshots/`
-5. The **sidebar panel** fetches snapshots from the server and renders the snapshot list
-6. **Restore/Swap** loads graph data back into ComfyUI with a lock guard to prevent concurrent operations
+4. The previous graph state is diffed against the current to **detect the change type** (node add/remove, connection, parameter, move, or mixed) — stored as a `changeType` field on the record
+5. New snapshots are sent to the **server** and stored as individual JSON files under `data/snapshots/`
+6. The **sidebar panel** and **timeline bar** fetch snapshots from the server and render them with change-type icons
+7. **Restore/Swap** loads graph data back into ComfyUI with a lock guard to prevent concurrent operations, and updates the graph cache so the next diff is accurate
 
 **Node-triggered capture flow:**
 

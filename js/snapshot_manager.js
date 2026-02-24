@@ -28,6 +28,7 @@ let showTimeline = false;
 // ─── State ───────────────────────────────────────────────────────────
 
 const lastCapturedHashMap = new Map();
+const lastGraphDataMap = new Map(); // workflowKey -> previous graphData for change-type detection
 let restoreLock = null;
 let captureTimer = null;
 let sidebarRefresh = null; // callback set by sidebar render
@@ -256,6 +257,73 @@ function validateSnapshotData(graphData) {
     return graphData != null && typeof graphData === "object" && Array.isArray(graphData.nodes);
 }
 
+// ─── Change-Type Detection ──────────────────────────────────────────
+
+function detectChangeType(prevGraph, currGraph) {
+    if (!prevGraph) return "initial";
+
+    const prevNodes = prevGraph.nodes || [];
+    const currNodes = currGraph.nodes || [];
+    const prevIds = new Set(prevNodes.map(n => n.id));
+    const currIds = new Set(currNodes.map(n => n.id));
+
+    const added = currNodes.filter(n => !prevIds.has(n.id));
+    const removed = prevNodes.filter(n => !currIds.has(n.id));
+    const nodesChanged = added.length > 0 || removed.length > 0;
+
+    // When nodes are added/removed, link changes are expected — don't flag separately
+    if (nodesChanged) {
+        if (added.length > 0 && removed.length > 0) return "mixed";
+        return added.length > 0 ? "node_add" : "node_remove";
+    }
+
+    // Node sets identical — check links, params, positions
+    let flags = 0;
+    const FLAG_CONNECTION = 1;
+    const FLAG_PARAM = 2;
+    const FLAG_MOVE = 4;
+
+    // Compare links
+    const prevLinks = JSON.stringify(prevGraph.links || []);
+    const currLinks = JSON.stringify(currGraph.links || []);
+    if (prevLinks !== currLinks) flags |= FLAG_CONNECTION;
+
+    // Build lookup for prev nodes by id
+    const prevNodeMap = new Map(prevNodes.map(n => [n.id, n]));
+
+    for (const cn of currNodes) {
+        const pn = prevNodeMap.get(cn.id);
+        if (!pn) continue;
+
+        // Compare widget values
+        const cw = JSON.stringify(cn.widgets_values ?? null);
+        const pw = JSON.stringify(pn.widgets_values ?? null);
+        if (cw !== pw) flags |= FLAG_PARAM;
+
+        // Compare positions
+        const cPos = Array.isArray(cn.pos) ? cn.pos : [0, 0];
+        const pPos = Array.isArray(pn.pos) ? pn.pos : [0, 0];
+        if (cPos[0] !== pPos[0] || cPos[1] !== pPos[1]) flags |= FLAG_MOVE;
+
+        // Early exit if all flags set
+        if (flags === (FLAG_CONNECTION | FLAG_PARAM | FLAG_MOVE)) break;
+    }
+
+    if (flags === 0) return "unknown";
+
+    // Count set flags
+    const count = ((flags & FLAG_CONNECTION) ? 1 : 0)
+               + ((flags & FLAG_PARAM) ? 1 : 0)
+               + ((flags & FLAG_MOVE) ? 1 : 0);
+    if (count > 1) return "mixed";
+
+    if (flags & FLAG_CONNECTION) return "connection";
+    if (flags & FLAG_PARAM) return "param";
+    if (flags & FLAG_MOVE) return "move";
+
+    return "unknown";
+}
+
 // ─── Restore Lock ───────────────────────────────────────────────────
 
 async function withRestoreLock(fn) {
@@ -330,6 +398,9 @@ async function captureSnapshot(label = "Auto") {
     const hash = quickHash(serialized);
     if (hash === lastCapturedHashMap.get(workflowKey)) return false;
 
+    const prevGraph = lastGraphDataMap.get(workflowKey);
+    const changeType = detectChangeType(prevGraph, graphData);
+
     const record = {
         id: generateId(),
         workflowKey,
@@ -338,6 +409,7 @@ async function captureSnapshot(label = "Auto") {
         nodeCount: nodes.length,
         graphData,
         locked: false,
+        changeType,
     };
 
     try {
@@ -348,6 +420,7 @@ async function captureSnapshot(label = "Auto") {
     }
 
     lastCapturedHashMap.set(workflowKey, hash);
+    lastGraphDataMap.set(workflowKey, graphData);
     pickerDirty = true;
     currentSnapshotId = null;  // new capture supersedes "current" bookmark
     activeSnapshotId = null;   // graph has changed, no snapshot is "active"
@@ -371,6 +444,8 @@ async function captureNodeSnapshot(label = "Node Trigger") {
     if (nodes.length === 0) return false;
 
     const workflowKey = getWorkflowKey();
+    const prevGraph = lastGraphDataMap.get(workflowKey);
+    const changeType = detectChangeType(prevGraph, graphData);
 
     const record = {
         id: generateId(),
@@ -381,6 +456,7 @@ async function captureNodeSnapshot(label = "Node Trigger") {
         graphData,
         locked: false,
         source: "node",
+        changeType,
     };
 
     try {
@@ -390,6 +466,7 @@ async function captureNodeSnapshot(label = "Node Trigger") {
         return false;
     }
 
+    lastGraphDataMap.set(workflowKey, graphData);
     pickerDirty = true;
     currentSnapshotId = null;
     activeSnapshotId = null;
@@ -426,6 +503,7 @@ async function restoreSnapshot(record) {
         try {
             await app.loadGraphData(record.graphData, true, true);
             lastCapturedHashMap.set(getWorkflowKey(), quickHash(JSON.stringify(record.graphData)));
+            lastGraphDataMap.set(getWorkflowKey(), record.graphData);
             showToast("Snapshot restored", "success");
         } catch (err) {
             console.warn(`[${EXTENSION_NAME}] Restore failed:`, err);
@@ -450,6 +528,7 @@ async function swapSnapshot(record) {
             const workflow = app.extensionManager?.workflow?.activeWorkflow;
             await app.loadGraphData(record.graphData, true, true, workflow);
             lastCapturedHashMap.set(getWorkflowKey(), quickHash(JSON.stringify(record.graphData)));
+            lastGraphDataMap.set(getWorkflowKey(), record.graphData);
             activeSnapshotId = record.id;
             showToast("Snapshot swapped", "success");
         } catch (err) {
@@ -787,23 +866,32 @@ const CSS = `
 .snap-timeline-track {
     flex: 1;
     height: 100%;
-    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
 }
 .snap-timeline-marker {
-    position: absolute;
-    top: 50%;
-    width: 10px;
-    height: 10px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
-    background: #3b82f6;
-    transform: translate(-50%, -50%);
     cursor: pointer;
     transition: transform 0.1s, box-shadow 0.1s;
     border: 2px solid transparent;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--snap-marker-color, #3b82f6);
+}
+.snap-timeline-marker svg {
+    display: block;
+    color: #fff;
+    pointer-events: none;
 }
 .snap-timeline-marker:hover {
-    transform: translate(-50%, -50%) scale(1.5);
-    box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+    transform: scale(1.4);
+    box-shadow: 0 0 8px var(--snap-marker-color, rgba(59,130,246,0.6));
 }
 .snap-timeline-marker-node {
     background: #6d28d9;
@@ -816,10 +904,10 @@ const CSS = `
 }
 .snap-timeline-marker-active {
     border-color: #fff;
-    transform: translate(-50%, -50%) scale(1.3);
+    transform: scale(1.3);
 }
 .snap-timeline-marker-active:hover {
-    transform: translate(-50%, -50%) scale(1.5);
+    transform: scale(1.5);
 }
 .snap-timeline-marker-current {
     background: #10b981;
@@ -851,6 +939,49 @@ const CSS = `
     line-height: 32px;
 }
 `;
+
+const CHANGE_TYPE_ICONS = {
+    initial: {
+        svg: '<svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="currentColor"/></svg>',
+        color: "#3b82f6",
+        label: "Initial snapshot",
+    },
+    node_add: {
+        svg: '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M6 2v8M2 6h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+        color: "#22c55e",
+        label: "Nodes added",
+    },
+    node_remove: {
+        svg: '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+        color: "#ef4444",
+        label: "Nodes removed",
+    },
+    connection: {
+        svg: '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M1 9L4 3L8 9L11 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>',
+        color: "#f59e0b",
+        label: "Connections changed",
+    },
+    param: {
+        svg: '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M0 6Q3 2 6 6Q9 10 12 6" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>',
+        color: "#a78bfa",
+        label: "Parameters changed",
+    },
+    move: {
+        svg: '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M6 1L3 4h6L6 1ZM6 11L3 8h6L6 11Z" fill="currentColor"/></svg>',
+        color: "#64748b",
+        label: "Nodes repositioned",
+    },
+    mixed: {
+        svg: '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M6 1L7.5 4.5H11L8.25 6.75L9.5 10.5L6 8L2.5 10.5L3.75 6.75L1 4.5H4.5Z" fill="currentColor"/></svg>',
+        color: "#f97316",
+        label: "Multiple changes",
+    },
+    unknown: {
+        svg: '<svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="3" fill="currentColor" opacity="0.5"/></svg>',
+        color: "#6b7280",
+        label: "Unknown change",
+    },
+};
 
 function injectStyles() {
     if (document.getElementById("snapshot-manager-styles")) return;
@@ -1161,7 +1292,8 @@ async function buildSidebar(el) {
 
             const meta = document.createElement("div");
             meta.className = "snap-item-meta";
-            meta.textContent = `${rec.nodeCount} nodes`;
+            const changeLabel = (CHANGE_TYPE_ICONS[rec.changeType] || CHANGE_TYPE_ICONS.unknown).label;
+            meta.textContent = `${rec.nodeCount} nodes \u00b7 ${changeLabel}`;
 
             info.appendChild(labelDiv);
             info.appendChild(time);
@@ -1297,23 +1429,19 @@ function buildTimeline() {
             return;
         }
 
-        const minTs = records[0].timestamp;
-        const maxTs = records[records.length - 1].timestamp;
-        const range = maxTs - minTs;
-
         for (const rec of records) {
             const marker = document.createElement("div");
             marker.className = "snap-timeline-marker";
 
-            // Position: spread evenly if all same timestamp, otherwise by time
-            const pct = range > 0
-                ? ((rec.timestamp - minTs) / range) * 100
-                : 50;
-            marker.style.left = `${pct}%`;
+            // Change-type icon and color
+            const iconInfo = CHANGE_TYPE_ICONS[rec.changeType] || CHANGE_TYPE_ICONS.unknown;
+            marker.style.setProperty("--snap-marker-color", iconInfo.color);
+            marker.innerHTML = iconInfo.svg;
 
-            // Node snapshot styling
+            // Node snapshot styling — override color to purple but keep the SVG icon
             if (rec.source === "node") {
                 marker.classList.add("snap-timeline-marker-node");
+                marker.style.setProperty("--snap-marker-color", "#6d28d9");
             }
 
             // Locked snapshot styling
@@ -1329,10 +1457,11 @@ function buildTimeline() {
             // Current snapshot styling (auto-saved "you were here" bookmark)
             if (rec.id === currentSnapshotId) {
                 marker.classList.add("snap-timeline-marker-current");
+                marker.style.setProperty("--snap-marker-color", "#10b981");
             }
 
-            // Native tooltip
-            marker.title = `${rec.label} — ${formatTime(rec.timestamp)}`;
+            // Native tooltip with change-type description
+            marker.title = `${rec.label} — ${formatTime(rec.timestamp)}\n${iconInfo.label}`;
 
             // Click to swap
             marker.addEventListener("click", () => {

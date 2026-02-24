@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="80" viewBox="0 0 720 80">
+  <!-- Background -->
+  <rect width="720" height="80" rx="8" fill="#1e293b"/>
+
+  <!-- Icon definitions -->
+  <defs>
+    <!-- Initial (blue) -->
+    <symbol id="icon-initial" viewBox="0 0 12 12">
+      <circle cx="6" cy="6" r="5" fill="currentColor"/>
+    </symbol>
+
+    <!-- Node Add (green) -->
+    <symbol id="icon-node-add" viewBox="0 0 12 12">
+      <path d="M6 2v8M2 6h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+
+    <!-- Node Remove (red) -->
+    <symbol id="icon-node-remove" viewBox="0 0 12 12">
+      <path d="M2 6h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+
+    <!-- Connection (amber) -->
+    <symbol id="icon-connection" viewBox="0 0 12 12">
+      <path d="M1 9L4 3L8 9L11 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </symbol>
+
+    <!-- Param (purple) -->
+    <symbol id="icon-param" viewBox="0 0 12 12">
+      <path d="M0 6Q3 2 6 6Q9 10 12 6" stroke="currentColor" stroke-width="1.5" fill="none"/>
+    </symbol>
+
+    <!-- Move (gray) -->
+    <symbol id="icon-move" viewBox="0 0 12 12">
+      <path d="M6 1L3 4h6L6 1ZM6 11L3 8h6L6 11Z" fill="currentColor"/>
+    </symbol>
+
+    <!-- Mixed (orange) -->
+    <symbol id="icon-mixed" viewBox="0 0 12 12">
+      <path d="M6 1L7.5 4.5H11L8.25 6.75L9.5 10.5L6 8L2.5 10.5L3.75 6.75L1 4.5H4.5Z" fill="currentColor"/>
+    </symbol>
+
+    <!-- Unknown (gray) -->
+    <symbol id="icon-unknown" viewBox="0 0 12 12">
+      <circle cx="6" cy="6" r="3" fill="currentColor" opacity="0.5"/>
+    </symbol>
+  </defs>
+
+  <!-- 8 icons evenly spaced: center positions at 45, 141.43, 237.86, 334.29, 430.71, 527.14, 623.57, 720-45=675 -->
+  <!-- Spacing: (720 - 2*45) / 7 = 90 -->
+
+  <!-- 1. Initial -->
+  <g transform="translate(45, 0)">
+    <circle cx="0" cy="28" r="16" fill="#3b82f6"/>
+    <use href="#icon-initial" x="-8" y="20" width="16" height="16" color="white"/>
+    <text x="0" y="60" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#94a3b8">Initial</text>
+  </g>
+
+  <!-- 2. Node Add -->
+  <g transform="translate(135, 0)">
+    <circle cx="0" cy="28" r="16" fill="#22c55e"/>
+    <use href="#icon-node-add" x="-8" y="20" width="16" height="16" color="white"/>
+    <text x="0" y="60" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#94a3b8">Node Add</text>
+  </g>
+
+  <!-- 3. Node Remove -->
+  <g transform="translate(225, 0)">
+    <circle cx="0" cy="28" r="16" fill="#ef4444"/>
+    <use href="#icon-node-remove" x="-8" y="20" width="16" height="16" color="white"/>
+    <text x="0" y="60" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#94a3b8">Node Remove</text>
+  </g>
+
+  <!-- 4. Connection -->
+  <g transform="translate(315, 0)">
+    <circle cx="0" cy="28" r="16" fill="#f59e0b"/>
+    <use href="#icon-connection" x="-8" y="20" width="16" height="16" color="white"/>
+    <text x="0" y="60" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#94a3b8">Connection</text>
+  </g>
+
+  <!-- 5. Param -->
+  <g transform="translate(405, 0)">
+    <circle cx="0" cy="28" r="16" fill="#a78bfa"/>
+    <use href="#icon-param" x="-8" y="20" width="16" height="16" color="white"/>
+    <text x="0" y="60" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#94a3b8">Param</text>
+  </g>
+
+  <!-- 6. Move -->
+  <g transform="translate(495, 0)">
+    <circle cx="0" cy="28" r="16" fill="#64748b"/>
+    <use href="#icon-move" x="-8" y="20" width="16" height="16" color="white"/>
+    <text x="0" y="60" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#94a3b8">Move</text>
+  </g>
+
+  <!-- 7. Mixed -->
+  <g transform="translate(585, 0)">
+    <circle cx="0" cy="28" r="16" fill="#f97316"/>
+    <use href="#icon-mixed" x="-8" y="20" width="16" height="16" color="white"/>
+    <text x="0" y="60" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#94a3b8">Mixed</text>
+  </g>
+
+  <!-- 8. Unknown -->
+  <g transform="translate(675, 0)">
+    <circle cx="0" cy="28" r="16" fill="#6b7280"/>
+    <use href="#icon-unknown" x="-8" y="20" width="16" height="16" color="white"/>
+    <text x="0" y="60" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#94a3b8">Unknown</text>
+  </g>
+</svg>
