@@ -39,6 +39,9 @@ let timelineRefresh = null;  // callback to re-render timeline
 let activeSnapshotId = null;   // ID of the snapshot currently loaded via swap
 let currentSnapshotId = null;  // ID of the auto-saved "Current" snapshot before a swap
 let diffBaseSnapshot = null;   // snapshot record selected as diff base (shift+click)
+const svgCache = new Map();    // "snapshotId:WxH" -> SVGElement template
+let svgClipCounter = 0;        // unique prefix for SVG clipPath IDs
+let sidebarTooltipEl = null;   // tooltip element for sidebar hover previews
 
 // ─── Server API Layer ───────────────────────────────────────────────
 
@@ -502,6 +505,291 @@ function computeDetailedDiff(baseGraph, targetGraph) {
     };
 }
 
+// ─── SVG Graph Renderer ─────────────────────────────────────────────
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const SVG_NODE_TITLE_HEIGHT = 25;
+const SVG_SLOT_SPACING = 20;
+const SVG_DEFAULTS = { width: 140, height: 80, color: "#333", bgcolor: "#353535" };
+const SVG_LINK_TYPE_COLORS = {
+    IMAGE: "#64b5f6", CLIP: "#ffa726", MODEL: "#b39ddb",
+    CONDITIONING: "#ef9a9a", LATENT: "#ff63c9", VAE: "#ff6e6e",
+    MASK: "#81c784", INT: "#7986cb", FLOAT: "#7986cb", STRING: "#7986cb",
+};
+const SVG_HIGHLIGHT_COLORS = { added: "#22c55e", removed: "#dc2626", modified: "#f59e0b" };
+
+function renderGraphSVG(graphData, options = {}) {
+    const {
+        width = 400, height = 300, padding = 40,
+        highlightNodes = null, showLabels = true,
+        showLinks = true, showSlots = true, showGroups = true,
+        backgroundColor = "#1a1a2e",
+    } = options;
+
+    const nodes = graphData?.nodes;
+    if (!nodes || nodes.length === 0) return null;
+
+    // Build node map (skip null entries)
+    const nodeMap = new Map();
+    for (const n of nodes) {
+        if (n == null) continue;
+        nodeMap.set(n.id, n);
+    }
+    if (nodeMap.size === 0) return null;
+
+    // Compute bounding box
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of nodeMap.values()) {
+        const x = n.pos?.[0] ?? 0;
+        const y = n.pos?.[1] ?? 0;
+        const w = n.size?.[0] ?? SVG_DEFAULTS.width;
+        const h = n.flags?.collapsed ? SVG_NODE_TITLE_HEIGHT : (n.size?.[1] ?? SVG_DEFAULTS.height);
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x + w > maxX) maxX = x + w;
+        if (y + h > maxY) maxY = y + h;
+    }
+
+    // Include groups in bbox
+    const groups = graphData.groups || [];
+    if (showGroups) {
+        for (const g of groups) {
+            if (!g?.bounding) continue;
+            const [gx, gy, gw, gh] = g.bounding;
+            if (gx < minX) minX = gx;
+            if (gy < minY) minY = gy;
+            if (gx + gw > maxX) maxX = gx + gw;
+            if (gy + gh > maxY) maxY = gy + gh;
+        }
+    }
+
+    // Guard zero-area bbox (single node edge case)
+    if (maxX - minX < 1) maxX = minX + SVG_DEFAULTS.width;
+    if (maxY - minY < 1) maxY = minY + SVG_DEFAULTS.height;
+
+    const bboxW = maxX - minX + padding * 2;
+    const bboxH = maxY - minY + padding * 2;
+    const vbX = minX - padding;
+    const vbY = minY - padding;
+
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", `${vbX} ${vbY} ${bboxW} ${bboxH}`);
+    svg.setAttribute("width", width);
+    svg.setAttribute("height", height);
+    svg.style.display = "block";
+
+    // Auto-simplify for thumbnails
+    const effectiveLabels = width < 200 ? false : showLabels;
+    const effectiveSlots = width < 200 ? false : showSlots;
+    const clipPrefix = `sc${svgClipCounter++}`;
+
+    // Background
+    const bg = document.createElementNS(SVG_NS, "rect");
+    bg.setAttribute("x", vbX);
+    bg.setAttribute("y", vbY);
+    bg.setAttribute("width", bboxW);
+    bg.setAttribute("height", bboxH);
+    bg.setAttribute("fill", backgroundColor);
+    svg.appendChild(bg);
+
+    // Groups
+    if (showGroups && groups.length > 0) {
+        for (const g of groups) {
+            if (!g?.bounding) continue;
+            const [gx, gy, gw, gh] = g.bounding;
+            const gRect = document.createElementNS(SVG_NS, "rect");
+            gRect.setAttribute("x", gx);
+            gRect.setAttribute("y", gy);
+            gRect.setAttribute("width", gw);
+            gRect.setAttribute("height", gh);
+            gRect.setAttribute("rx", "5");
+            const gColor = g.color || "#335";
+            gRect.setAttribute("fill", gColor);
+            gRect.setAttribute("fill-opacity", "0.3");
+            gRect.setAttribute("stroke", gColor);
+            gRect.setAttribute("stroke-opacity", "0.5");
+            gRect.setAttribute("stroke-width", "1");
+            svg.appendChild(gRect);
+
+            // Group title
+            if (effectiveLabels && g.title) {
+                const gText = document.createElementNS(SVG_NS, "text");
+                gText.setAttribute("x", gx + 8);
+                gText.setAttribute("y", gy + 16);
+                gText.setAttribute("fill", "#aaa");
+                gText.setAttribute("font-size", "14");
+                gText.setAttribute("font-family", "system-ui, sans-serif");
+                gText.textContent = g.title;
+                svg.appendChild(gText);
+            }
+        }
+    }
+
+    // Slot position helpers
+    function getOutputSlotPos(node, slotIndex) {
+        const x = node.pos?.[0] ?? 0;
+        const y = node.pos?.[1] ?? 0;
+        const w = node.size?.[0] ?? SVG_DEFAULTS.width;
+        return [x + w, y + SVG_NODE_TITLE_HEIGHT + slotIndex * SVG_SLOT_SPACING + SVG_SLOT_SPACING / 2];
+    }
+
+    function getInputSlotPos(node, slotIndex) {
+        const x = node.pos?.[0] ?? 0;
+        const y = node.pos?.[1] ?? 0;
+        return [x, y + SVG_NODE_TITLE_HEIGHT + slotIndex * SVG_SLOT_SPACING + SVG_SLOT_SPACING / 2];
+    }
+
+    // Links
+    const links = (graphData.links || []).filter(Boolean);
+    if (showLinks && links.length <= 2000) {
+        for (const link of links) {
+            const srcNodeId = link[1];
+            const srcSlot = link[2];
+            const destNodeId = link[3];
+            const destSlot = link[4];
+            const linkType = link[5];
+
+            const srcNode = nodeMap.get(srcNodeId);
+            const destNode = nodeMap.get(destNodeId);
+            if (!srcNode || !destNode) continue;
+
+            // Skip links from collapsed source nodes where slot is hidden
+            const srcCollapsed = srcNode.flags?.collapsed;
+            const destCollapsed = destNode.flags?.collapsed;
+
+            const [srcX, srcY] = srcCollapsed
+                ? [(srcNode.pos?.[0] ?? 0) + (srcNode.size?.[0] ?? SVG_DEFAULTS.width), (srcNode.pos?.[1] ?? 0) + SVG_NODE_TITLE_HEIGHT / 2]
+                : getOutputSlotPos(srcNode, srcSlot);
+            const [destX, destY] = destCollapsed
+                ? [(destNode.pos?.[0] ?? 0), (destNode.pos?.[1] ?? 0) + SVG_NODE_TITLE_HEIGHT / 2]
+                : getInputSlotPos(destNode, destSlot);
+
+            const dx = Math.max(Math.abs(destX - srcX) * 0.5, 50);
+            const d = `M ${srcX} ${srcY} C ${srcX + dx} ${srcY}, ${destX - dx} ${destY}, ${destX} ${destY}`;
+
+            const path = document.createElementNS(SVG_NS, "path");
+            path.setAttribute("d", d);
+            path.setAttribute("fill", "none");
+            const color = SVG_LINK_TYPE_COLORS[linkType] || "#888";
+            path.setAttribute("stroke", color);
+            path.setAttribute("stroke-width", "2");
+            path.setAttribute("stroke-opacity", "0.5");
+            svg.appendChild(path);
+        }
+    }
+
+    // Nodes
+    for (const n of nodeMap.values()) {
+        const x = n.pos?.[0] ?? 0;
+        const y = n.pos?.[1] ?? 0;
+        const w = n.size?.[0] ?? SVG_DEFAULTS.width;
+        const isCollapsed = n.flags?.collapsed;
+        const h = isCollapsed ? SVG_NODE_TITLE_HEIGHT : (n.size?.[1] ?? SVG_DEFAULTS.height);
+        const bgcolor = n.bgcolor || SVG_DEFAULTS.bgcolor;
+        const color = n.color || SVG_DEFAULTS.color;
+
+        const highlightType = highlightNodes?.get(n.id);
+        const highlightColor = highlightType ? SVG_HIGHLIGHT_COLORS[highlightType] : null;
+
+        // Node body
+        const body = document.createElementNS(SVG_NS, "rect");
+        body.setAttribute("x", x);
+        body.setAttribute("y", y);
+        body.setAttribute("width", w);
+        body.setAttribute("height", h);
+        body.setAttribute("rx", "4");
+        body.setAttribute("fill", bgcolor);
+        if (highlightColor) {
+            body.setAttribute("stroke", highlightColor);
+            body.setAttribute("stroke-width", "3");
+        } else {
+            body.setAttribute("stroke", "#555");
+            body.setAttribute("stroke-width", "1");
+        }
+        svg.appendChild(body);
+
+        // Title bar
+        const titleBar = document.createElementNS(SVG_NS, "rect");
+        titleBar.setAttribute("x", x);
+        titleBar.setAttribute("y", y);
+        titleBar.setAttribute("width", w);
+        titleBar.setAttribute("height", SVG_NODE_TITLE_HEIGHT);
+        titleBar.setAttribute("rx", "4");
+        titleBar.setAttribute("fill", color);
+        svg.appendChild(titleBar);
+
+        // Title text
+        if (effectiveLabels) {
+            const titleText = document.createElementNS(SVG_NS, "text");
+            titleText.setAttribute("x", x + 8);
+            titleText.setAttribute("y", y + 16);
+            titleText.setAttribute("fill", "#eee");
+            titleText.setAttribute("font-size", "11");
+            titleText.setAttribute("font-family", "system-ui, sans-serif");
+            // Truncate to fit node width
+            const maxChars = Math.max(4, Math.floor(w / 7));
+            const title = n.title || n.type || "";
+            titleText.textContent = title.length > maxChars ? title.slice(0, maxChars - 1) + "\u2026" : title;
+            // Clip to node width
+            const clipId = `${clipPrefix}-${n.id}`;
+            const clipPath = document.createElementNS(SVG_NS, "clipPath");
+            clipPath.setAttribute("id", clipId);
+            const clipRect = document.createElementNS(SVG_NS, "rect");
+            clipRect.setAttribute("x", x);
+            clipRect.setAttribute("y", y);
+            clipRect.setAttribute("width", w);
+            clipRect.setAttribute("height", SVG_NODE_TITLE_HEIGHT);
+            clipPath.appendChild(clipRect);
+            svg.appendChild(clipPath);
+            titleText.setAttribute("clip-path", `url(#${clipId})`);
+            svg.appendChild(titleText);
+        }
+
+        // Slots
+        if (effectiveSlots && !isCollapsed) {
+            const inputs = n.inputs || [];
+            for (let i = 0; i < inputs.length; i++) {
+                const [sx, sy] = getInputSlotPos(n, i);
+                const circle = document.createElementNS(SVG_NS, "circle");
+                circle.setAttribute("cx", sx);
+                circle.setAttribute("cy", sy);
+                circle.setAttribute("r", "4");
+                const slotType = inputs[i]?.type || "";
+                circle.setAttribute("fill", SVG_LINK_TYPE_COLORS[slotType] || "#888");
+                svg.appendChild(circle);
+            }
+
+            const outputs = n.outputs || [];
+            for (let i = 0; i < outputs.length; i++) {
+                const [sx, sy] = getOutputSlotPos(n, i);
+                const circle = document.createElementNS(SVG_NS, "circle");
+                circle.setAttribute("cx", sx);
+                circle.setAttribute("cy", sy);
+                circle.setAttribute("r", "4");
+                const slotType = outputs[i]?.type || "";
+                circle.setAttribute("fill", SVG_LINK_TYPE_COLORS[slotType] || "#888");
+                svg.appendChild(circle);
+            }
+        }
+    }
+
+    return svg;
+}
+
+function getCachedSVG(snapshotId, graphData, options = {}) {
+    const { width = 400, height = 300 } = options;
+    const key = `${snapshotId}:${width}x${height}`;
+    if (svgCache.has(key)) {
+        return svgCache.get(key).cloneNode(true);
+    }
+    const svg = renderGraphSVG(graphData, options);
+    if (svg) {
+        svgCache.set(key, svg);
+        return svg.cloneNode(true);
+    }
+    return null;
+}
+
 // ─── Restore Lock ───────────────────────────────────────────────────
 
 async function withRestoreLock(fn) {
@@ -562,7 +850,7 @@ async function showPromptDialog(message, defaultValue = "Manual") {
 
 // ─── Diff Modal ─────────────────────────────────────────────────────
 
-function showDiffModal(baseLabel, targetLabel, diff, allNodes) {
+function showDiffModal(baseLabel, targetLabel, diff, allNodes, baseGraphData, targetGraphData) {
     // Overlay
     const overlay = document.createElement("div");
     overlay.className = "snap-diff-overlay";
@@ -763,8 +1051,104 @@ function showDiffModal(baseLabel, targetLabel, diff, allNodes) {
         return s.length > 80 ? s.slice(0, 77) + "\u2026" : s;
     }
 
+    // SVG comparison panel
+    let svgCompare = null;
+    if (baseGraphData && targetGraphData) {
+        const highlightNodesBase = new Map();
+        for (const n of diff.removedNodes) highlightNodesBase.set(n.id, "removed");
+        for (const n of diff.modifiedNodes) highlightNodesBase.set(n.id, "modified");
+
+        const highlightNodesTarget = new Map();
+        for (const n of diff.addedNodes) highlightNodesTarget.set(n.id, "added");
+        for (const n of diff.modifiedNodes) highlightNodesTarget.set(n.id, "modified");
+
+        const svgOpts = { width: 330, height: 220, showLabels: true, showLinks: true, showSlots: false, showGroups: true };
+        const baseSvg = renderGraphSVG(baseGraphData, { ...svgOpts, highlightNodes: highlightNodesBase });
+        const targetSvg = renderGraphSVG(targetGraphData, { ...svgOpts, highlightNodes: highlightNodesTarget });
+
+        if (baseSvg || targetSvg) {
+            svgCompare = document.createElement("div");
+            svgCompare.className = "snap-diff-svg-compare";
+
+            const basePanel = document.createElement("div");
+            basePanel.className = "snap-diff-svg-panel";
+            const baseLbl = document.createElement("div");
+            baseLbl.className = "snap-diff-svg-panel-label";
+            baseLbl.textContent = "Base";
+            basePanel.appendChild(baseLbl);
+            if (baseSvg) basePanel.appendChild(baseSvg);
+
+            const targetPanel = document.createElement("div");
+            targetPanel.className = "snap-diff-svg-panel";
+            const targetLbl = document.createElement("div");
+            targetLbl.className = "snap-diff-svg-panel-label";
+            targetLbl.textContent = "Target";
+            targetPanel.appendChild(targetLbl);
+            if (targetSvg) targetPanel.appendChild(targetSvg);
+
+            svgCompare.appendChild(basePanel);
+            svgCompare.appendChild(targetPanel);
+        }
+    }
+
     modal.appendChild(hdr);
     modal.appendChild(summaryBar);
+    if (svgCompare) modal.appendChild(svgCompare);
+    modal.appendChild(body);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    function dismiss() {
+        overlay.remove();
+        document.removeEventListener("keydown", onKey);
+    }
+
+    function onKey(e) {
+        if (e.key === "Escape") dismiss();
+    }
+    document.addEventListener("keydown", onKey);
+
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) dismiss();
+    });
+}
+
+// ─── Preview Modal ──────────────────────────────────────────────────
+
+function showPreviewModal(record) {
+    const overlay = document.createElement("div");
+    overlay.className = "snap-preview-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "snap-preview-modal";
+
+    const hdr = document.createElement("div");
+    hdr.className = "snap-preview-header";
+    const hdrTitle = document.createElement("span");
+    hdrTitle.textContent = `${record.label} \u2014 ${formatTime(record.timestamp)}`;
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "\u2715";
+    closeBtn.addEventListener("click", dismiss);
+    hdr.appendChild(hdrTitle);
+    hdr.appendChild(closeBtn);
+
+    const body = document.createElement("div");
+    body.className = "snap-preview-body";
+
+    const svg = renderGraphSVG(record.graphData, {
+        width: 860, height: 600,
+        showLabels: true, showLinks: true, showSlots: true, showGroups: true,
+    });
+    if (svg) {
+        body.appendChild(svg);
+    } else {
+        const fallback = document.createElement("div");
+        fallback.style.cssText = "color: #666; font-size: 13px; padding: 32px;";
+        fallback.textContent = "Unable to render preview";
+        body.appendChild(fallback);
+    }
+
+    modal.appendChild(hdr);
     modal.appendChild(body);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
@@ -1551,6 +1935,102 @@ const CSS = `
 .snap-btn-diff.snap-diff-base-active {
     box-shadow: 0 0 6px rgba(109,40,217,0.6);
 }
+.snap-preview-tooltip {
+    position: fixed;
+    z-index: 10001;
+    pointer-events: none;
+    background: #1e1e2e;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.snap-preview-tooltip.visible {
+    opacity: 1;
+}
+.snap-preview-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.snap-preview-modal {
+    width: min(900px, 90vw);
+    max-height: 90vh;
+    background: #1e1e2e;
+    border: 1px solid #444;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    color: #ccc;
+}
+.snap-preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid #444;
+    font-weight: 700;
+    font-size: 14px;
+}
+.snap-preview-header button {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.snap-preview-header button:hover {
+    background: #333;
+    color: #fff;
+}
+.snap-preview-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 16px;
+}
+.snap-diff-svg-compare {
+    display: flex;
+    gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid #333;
+    justify-content: center;
+}
+.snap-diff-svg-panel {
+    flex: 1;
+    text-align: center;
+}
+.snap-diff-svg-panel-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #888;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.snap-btn-preview {
+    background: #334155;
+    color: #fff;
+    font-size: 13px;
+    min-width: 28px;
+    text-align: center;
+}
+.snap-btn-preview:hover:not(:disabled) {
+    background: #475569;
+}
 `;
 
 const CHANGE_TYPE_ICONS = {
@@ -1616,10 +2096,21 @@ function formatDate(ts) {
 
 async function buildSidebar(el) {
     injectStyles();
+    // Clean up previous tooltip if sidebar is being rebuilt
+    if (sidebarTooltipEl) {
+        sidebarTooltipEl.remove();
+        sidebarTooltipEl = null;
+    }
     el.innerHTML = "";
 
     const container = document.createElement("div");
     container.className = "snap-sidebar";
+
+    // Shared hover tooltip
+    const tooltip = document.createElement("div");
+    tooltip.className = "snap-preview-tooltip";
+    document.body.appendChild(tooltip);
+    let tooltipTimer = null;
 
     // Header
     const header = document.createElement("div");
@@ -1831,6 +2322,10 @@ async function buildSidebar(el) {
     }
 
     async function refresh(resetSearch = false) {
+        svgCache.clear();
+        // Hide tooltip — items are about to be destroyed so mouseleave won't fire
+        if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+        tooltip.classList.remove("visible");
         const currentKey = getWorkflowKey();
         const effKey = getEffectiveWorkflowKey();
         const isViewingOther = viewingWorkflowKey != null && viewingWorkflowKey !== currentKey;
@@ -2086,15 +2581,49 @@ async function buildSidebar(el) {
                 }
                 const diff = computeDetailedDiff(baseGraph, targetGraph);
                 const allNodes = buildNodeLookup(baseGraph, targetGraph);
-                showDiffModal(baseLabel, targetLabel, diff, allNodes);
+                showDiffModal(baseLabel, targetLabel, diff, allNodes, baseGraph, targetGraph);
+            });
+
+            const previewBtn = document.createElement("button");
+            previewBtn.className = "snap-btn-preview";
+            previewBtn.textContent = "\uD83D\uDC41";
+            previewBtn.title = "Preview workflow graph";
+            previewBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                showPreviewModal(rec);
             });
 
             actions.appendChild(noteBtn);
+            actions.appendChild(previewBtn);
             actions.appendChild(diffBtn);
             actions.appendChild(lockBtn);
             actions.appendChild(swapBtn);
             actions.appendChild(restoreBtn);
             actions.appendChild(deleteBtn);
+
+            // Hover tooltip
+            item.addEventListener("mouseenter", () => {
+                tooltipTimer = setTimeout(() => {
+                    const svg = getCachedSVG(rec.id, rec.graphData, { width: 240, height: 180 });
+                    if (!svg) return;
+                    tooltip.innerHTML = "";
+                    tooltip.appendChild(svg);
+                    const rect = item.getBoundingClientRect();
+                    let left = rect.right + 8;
+                    let top = rect.top;
+                    // Clamp to viewport
+                    if (left + 260 > window.innerWidth) left = rect.left - 260;
+                    if (top + 200 > window.innerHeight) top = window.innerHeight - 200;
+                    if (top < 0) top = 0;
+                    tooltip.style.left = `${left}px`;
+                    tooltip.style.top = `${top}px`;
+                    tooltip.classList.add("visible");
+                }, 200);
+            });
+            item.addEventListener("mouseleave", () => {
+                if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+                tooltip.classList.remove("visible");
+            });
 
             item.appendChild(info);
             item.appendChild(actions);
@@ -2111,6 +2640,7 @@ async function buildSidebar(el) {
     }
 
     sidebarRefresh = refresh;
+    sidebarTooltipEl = tooltip;
     await refresh(true);
 }
 
@@ -2311,6 +2841,11 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                 destroy: () => {
                     sidebarRefresh = null;
                     viewingWorkflowKey = null;
+                    // Clean up tooltip
+                    if (sidebarTooltipEl) {
+                        sidebarTooltipEl.remove();
+                        sidebarTooltipEl = null;
+                    }
                 },
             });
         },

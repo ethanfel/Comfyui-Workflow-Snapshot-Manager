@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://registry.comfy.org/publishers/ethanfel/nodes/comfyui-snapshot-manager"><img src="https://img.shields.io/badge/ComfyUI-Registry-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=" alt="ComfyUI Registry"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/></a>
-  <img src="https://img.shields.io/badge/version-2.4.0-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-2.5.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/ComfyUI-Extension-purple" alt="ComfyUI Extension"/>
 </p>
 
@@ -33,6 +33,7 @@
 - **Active & current markers** — When you swap to a snapshot, the timeline highlights where you came from (green dot) and where you are (white ring)
 - **Auto-save before swap** — Swapping to an older snapshot automatically saves your current state first, so you can always get back; browsing between saved snapshots skips redundant saves
 - **Ctrl+S shortcut** — Press Ctrl+S (or Cmd+S on Mac) to take a manual snapshot alongside ComfyUI's own save
+- **SVG graph previews** — Hover any snapshot for a tooltip preview of the workflow graph; click the eye button for a full-size modal; diff view now shows side-by-side SVG comparison with color-coded highlights (green = added, red = removed, amber = modified)
 - **Diff view** — Compare any snapshot against the current workflow (one click) or two snapshots against each other (Shift+click to set base); see added/removed/modified nodes, widget value changes, and rewired connections in a single modal
 - **Lock/pin snapshots** — Protect important snapshots from auto-pruning and "Clear All" with a single click
 - **Concurrency-safe** — Lock guard prevents double-click issues during restore
@@ -78,6 +79,7 @@ Each snapshot has action buttons:
 
 | Button | Action |
 |--------|--------|
+| **Preview** (👁) | Opens a full-size SVG preview of the workflow graph |
 | **Lock** | Toggles lock protection (padlock icon) |
 | **Swap** | Replaces the current workflow in-place (same tab) |
 | **Restore** | Opens the snapshot as a new workflow |
@@ -154,6 +156,7 @@ The diff modal shows:
 
 | Section | Details |
 |---------|---------|
+| **SVG comparison** | Side-by-side graph previews at the top — base on the left, target on the right, with highlighted nodes (green = added, red = removed, amber = modified) |
 | **Summary pills** | Colored counts — green (added), red (removed), amber (modified), blue (links) |
 | **Added Nodes** | Nodes present in the target but not the base |
 | **Removed Nodes** | Nodes present in the base but not the target |
@@ -161,6 +164,16 @@ The diff modal shows:
 | **Link Changes** | Added/removed connections with node names and slot indices |
 
 Sections are collapsible (click the header to toggle). If the two snapshots are identical, a "No differences found." message is shown. Dismiss the modal with **Escape**, the **X** button, or by clicking outside.
+
+### 13. SVG Graph Previews
+
+Visually inspect any snapshot without restoring or swapping it.
+
+**Hover tooltip:** Hover over any snapshot in the sidebar list. After 200ms, a small SVG preview appears next to the item showing the graph layout with nodes, links, and groups. Move the mouse away to dismiss.
+
+**Preview modal:** Click the **eye button** (👁) on any snapshot to open a full-size preview modal showing the complete graph with node titles, colored link beziers, input/output slot dots, and group overlays. Dismiss with **Escape**, the **X** button, or by clicking outside.
+
+The SVG renderer draws nodes with their stored position, size, and colors. Links are rendered as bezier curves colored by type (blue for IMAGE, orange for CLIP, purple for MODEL, etc.). Collapsed nodes appear as thin title-only strips. Thumbnails (hover tooltips) auto-simplify by hiding labels and slot dots for clarity at small sizes.
 
 ## Settings
 
