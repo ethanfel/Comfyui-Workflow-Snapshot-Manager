@@ -38,6 +38,7 @@ let timelineEl = null;       // root DOM element for timeline bar
 let timelineRefresh = null;  // callback to re-render timeline
 let activeSnapshotId = null;   // ID of the snapshot currently loaded via swap
 let currentSnapshotId = null;  // ID of the auto-saved "Current" snapshot before a swap
+let diffBaseSnapshot = null;   // snapshot record selected as diff base (shift+click)
 
 // ─── Server API Layer ───────────────────────────────────────────────
 
@@ -355,6 +356,152 @@ function detectChangeType(prevGraph, currGraph) {
     return "unknown";
 }
 
+// ─── Detailed Diff ──────────────────────────────────────────────────
+
+function buildNodeLookup(...graphs) {
+    const map = new Map();
+    for (const g of graphs) {
+        if (!g || !Array.isArray(g.nodes)) continue;
+        for (const n of g.nodes) {
+            if (!map.has(n.id)) {
+                map.set(n.id, { type: n.type || "?", title: n.title || n.type || `#${n.id}` });
+            }
+        }
+    }
+    return map;
+}
+
+function computeDetailedDiff(baseGraph, targetGraph) {
+    const empty = {
+        addedNodes: [], removedNodes: [], modifiedNodes: [],
+        addedLinks: [], removedLinks: [],
+        summary: { nodesAdded: 0, nodesRemoved: 0, nodesModified: 0, linksAdded: 0, linksRemoved: 0 },
+    };
+    if (!baseGraph && !targetGraph) return empty;
+    const bNodes = (baseGraph?.nodes || []);
+    const tNodes = (targetGraph?.nodes || []);
+
+    const baseMap = new Map(bNodes.map(n => [n.id, n]));
+    const targetMap = new Map(tNodes.map(n => [n.id, n]));
+
+    const addedNodes = [];
+    const removedNodes = [];
+    const modifiedNodes = [];
+
+    // Removed: in base but not in target
+    for (const [id, n] of baseMap) {
+        if (!targetMap.has(id)) {
+            removedNodes.push({ id, type: n.type || "?", title: n.title || n.type || `#${id}` });
+        }
+    }
+
+    // Added or modified: in target
+    for (const [id, tn] of targetMap) {
+        const bn = baseMap.get(id);
+        if (!bn) {
+            addedNodes.push({ id, type: tn.type || "?", title: tn.title || tn.type || `#${id}` });
+            continue;
+        }
+        // Check modifications
+        const changes = {};
+
+        // Position
+        if (bn.pos?.[0] !== tn.pos?.[0] || bn.pos?.[1] !== tn.pos?.[1]) {
+            changes.position = { from: bn.pos, to: tn.pos };
+        }
+
+        // Size
+        if (bn.size?.[0] !== tn.size?.[0] || bn.size?.[1] !== tn.size?.[1]) {
+            changes.size = { from: bn.size, to: tn.size };
+        }
+
+        // Title
+        if ((bn.title || "") !== (tn.title || "")) {
+            changes.title = { from: bn.title || "", to: tn.title || "" };
+        }
+
+        // Mode
+        if (bn.mode !== tn.mode) {
+            changes.mode = { from: bn.mode, to: tn.mode };
+        }
+
+        // Widget values
+        const bw = bn.widgets_values;
+        const tw = tn.widgets_values;
+        if (bw !== tw) {
+            if (bw == null || tw == null || !Array.isArray(bw) || !Array.isArray(tw) || bw.length !== tw.length) {
+                changes.widgetValues = { from: bw, to: tw };
+            } else {
+                const diffs = [];
+                for (let i = 0; i < Math.max(bw.length, tw.length); i++) {
+                    const bv = i < bw.length ? bw[i] : undefined;
+                    const tv = i < tw.length ? tw[i] : undefined;
+                    if (bv !== tv) {
+                        const bs = typeof bv === "object" ? JSON.stringify(bv) : String(bv ?? "");
+                        const ts = typeof tv === "object" ? JSON.stringify(tv) : String(tv ?? "");
+                        if (bs !== ts) diffs.push({ index: i, from: bs, to: ts });
+                    }
+                }
+                if (diffs.length > 0) changes.widgetValues = diffs;
+            }
+        }
+
+        // Properties (shallow key comparison)
+        const bp = bn.properties || {};
+        const tp = tn.properties || {};
+        const allPropKeys = new Set([...Object.keys(bp), ...Object.keys(tp)]);
+        const propDiffs = [];
+        for (const key of allPropKeys) {
+            const bv = bp[key];
+            const tv = tp[key];
+            if (bv !== tv) {
+                const bs = typeof bv === "object" ? JSON.stringify(bv) : String(bv ?? "");
+                const ts = typeof tv === "object" ? JSON.stringify(tv) : String(tv ?? "");
+                if (bs !== ts) propDiffs.push({ key, from: bs, to: ts });
+            }
+        }
+        if (propDiffs.length > 0) changes.properties = propDiffs;
+
+        if (Object.keys(changes).length > 0) {
+            modifiedNodes.push({
+                id, type: tn.type || "?", title: tn.title || tn.type || `#${id}`, changes,
+            });
+        }
+    }
+
+    // Links
+    const bLinks = (baseGraph?.links || []).filter(Boolean);
+    const tLinks = (targetGraph?.links || []).filter(Boolean);
+
+    const baseLinkMap = new Map(bLinks.map(l => [l[0], l]));
+    const targetLinkMap = new Map(tLinks.map(l => [l[0], l]));
+
+    const addedLinks = [];
+    const removedLinks = [];
+
+    for (const [linkId, l] of baseLinkMap) {
+        if (!targetLinkMap.has(linkId)) {
+            removedLinks.push({ linkId, srcNodeId: l[1], srcSlot: l[2], destNodeId: l[3], destSlot: l[4], type: l[5] });
+        }
+    }
+    for (const [linkId, l] of targetLinkMap) {
+        if (!baseLinkMap.has(linkId)) {
+            addedLinks.push({ linkId, srcNodeId: l[1], srcSlot: l[2], destNodeId: l[3], destSlot: l[4], type: l[5] });
+        }
+    }
+
+    return {
+        addedNodes, removedNodes, modifiedNodes, addedLinks, removedLinks,
+        summary: {
+            nodesAdded: addedNodes.length,
+            nodesRemoved: removedNodes.length,
+            nodesModified: modifiedNodes.length,
+            linksAdded: addedLinks.length,
+            linksRemoved: removedLinks.length,
+        },
+    };
+}
+
 // ─── Restore Lock ───────────────────────────────────────────────────
 
 async function withRestoreLock(fn) {
@@ -411,6 +558,230 @@ async function showPromptDialog(message, defaultValue = "Manual") {
     } catch {
         return window.prompt(message, defaultValue);
     }
+}
+
+// ─── Diff Modal ─────────────────────────────────────────────────────
+
+function showDiffModal(baseLabel, targetLabel, diff, allNodes) {
+    // Overlay
+    const overlay = document.createElement("div");
+    overlay.className = "snap-diff-overlay";
+
+    // Modal
+    const modal = document.createElement("div");
+    modal.className = "snap-diff-modal";
+
+    // Header
+    const hdr = document.createElement("div");
+    hdr.className = "snap-diff-header";
+    const hdrTitle = document.createElement("span");
+    hdrTitle.textContent = `${baseLabel} \u2192 ${targetLabel}`;
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "\u2715";
+    closeBtn.addEventListener("click", dismiss);
+    hdr.appendChild(hdrTitle);
+    hdr.appendChild(closeBtn);
+
+    // Summary pills
+    const { summary } = diff;
+    const summaryBar = document.createElement("div");
+    summaryBar.className = "snap-diff-summary";
+    const pills = [
+        { count: summary.nodesAdded, label: "added", color: "#22c55e" },
+        { count: summary.nodesRemoved, label: "removed", color: "#dc2626" },
+        { count: summary.nodesModified, label: "modified", color: "#f59e0b" },
+        { count: summary.linksAdded, label: "links +", color: "#3b82f6" },
+        { count: summary.linksRemoved, label: "links \u2212", color: "#3b82f6" },
+    ];
+    for (const p of pills) {
+        if (p.count === 0) continue;
+        const pill = document.createElement("span");
+        pill.style.cssText = `background:${p.color}; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600;`;
+        pill.textContent = `${p.count} ${p.label}`;
+        summaryBar.appendChild(pill);
+    }
+
+    // Body (scrollable)
+    const body = document.createElement("div");
+    body.className = "snap-diff-body";
+
+    const totalChanges = summary.nodesAdded + summary.nodesRemoved + summary.nodesModified + summary.linksAdded + summary.linksRemoved;
+
+    if (totalChanges === 0) {
+        const emptyMsg = document.createElement("div");
+        emptyMsg.className = "snap-diff-empty";
+        emptyMsg.textContent = "No differences found.";
+        body.appendChild(emptyMsg);
+    } else {
+        // Helper: collapsible section
+        function makeSection(title, count, entries, renderEntry) {
+            if (count === 0) return null;
+            const section = document.createElement("div");
+            section.className = "snap-diff-section";
+            const sectionHdr = document.createElement("div");
+            sectionHdr.className = "snap-diff-section-header";
+            const arrow = document.createElement("span");
+            arrow.className = "snap-diff-section-arrow";
+            arrow.textContent = "\u25BC";
+            const sectionTitle = document.createElement("span");
+            sectionTitle.textContent = `${title} (${count})`;
+            sectionHdr.appendChild(arrow);
+            sectionHdr.appendChild(sectionTitle);
+            const sectionBody = document.createElement("div");
+            sectionBody.className = "snap-diff-section-body";
+            for (const entry of entries) {
+                sectionBody.appendChild(renderEntry(entry));
+            }
+            let collapsed = false;
+            sectionHdr.addEventListener("click", () => {
+                collapsed = !collapsed;
+                sectionBody.style.display = collapsed ? "none" : "";
+                arrow.textContent = collapsed ? "\u25B6" : "\u25BC";
+            });
+            section.appendChild(sectionHdr);
+            section.appendChild(sectionBody);
+            return section;
+        }
+
+        function nodeEntry(n, colorClass) {
+            const el = document.createElement("div");
+            el.className = `snap-diff-node-entry ${colorClass}`;
+            el.textContent = `${n.title} (${n.type}) #${n.id}`;
+            return el;
+        }
+
+        // Added Nodes
+        const addedSec = makeSection("Added Nodes", diff.addedNodes.length, diff.addedNodes, (n) => nodeEntry(n, "snap-diff-added"));
+        if (addedSec) body.appendChild(addedSec);
+
+        // Removed Nodes
+        const removedSec = makeSection("Removed Nodes", diff.removedNodes.length, diff.removedNodes, (n) => nodeEntry(n, "snap-diff-removed"));
+        if (removedSec) body.appendChild(removedSec);
+
+        // Modified Nodes
+        const modSec = makeSection("Modified Nodes", diff.modifiedNodes.length, diff.modifiedNodes, (n) => {
+            const wrap = document.createElement("div");
+            wrap.className = "snap-diff-node-entry snap-diff-neutral";
+            const header = document.createElement("div");
+            header.textContent = `${n.title} (${n.type}) #${n.id}`;
+            wrap.appendChild(header);
+
+            const { changes } = n;
+            if (changes.position) {
+                const d = document.createElement("div");
+                d.className = "snap-diff-change-detail";
+                const from = changes.position.from || [0, 0];
+                const to = changes.position.to || [0, 0];
+                d.appendChild(makeValueChange("Position", `[${Math.round(from[0])}, ${Math.round(from[1])}]`, `[${Math.round(to[0])}, ${Math.round(to[1])}]`));
+                wrap.appendChild(d);
+            }
+            if (changes.size) {
+                const d = document.createElement("div");
+                d.className = "snap-diff-change-detail";
+                const from = changes.size.from || [0, 0];
+                const to = changes.size.to || [0, 0];
+                d.appendChild(makeValueChange("Size", `[${Math.round(from[0])}, ${Math.round(from[1])}]`, `[${Math.round(to[0])}, ${Math.round(to[1])}]`));
+                wrap.appendChild(d);
+            }
+            if (changes.title) {
+                const d = document.createElement("div");
+                d.className = "snap-diff-change-detail";
+                d.appendChild(makeValueChange("Title", changes.title.from, changes.title.to));
+                wrap.appendChild(d);
+            }
+            if (changes.mode) {
+                const d = document.createElement("div");
+                d.className = "snap-diff-change-detail";
+                d.appendChild(makeValueChange("Mode", String(changes.mode.from), String(changes.mode.to)));
+                wrap.appendChild(d);
+            }
+            if (changes.widgetValues) {
+                if (Array.isArray(changes.widgetValues)) {
+                    for (const wv of changes.widgetValues) {
+                        const d = document.createElement("div");
+                        d.className = "snap-diff-change-detail";
+                        d.appendChild(makeValueChange(`Value[${wv.index}]`, wv.from, wv.to));
+                        wrap.appendChild(d);
+                    }
+                } else {
+                    const d = document.createElement("div");
+                    d.className = "snap-diff-change-detail";
+                    d.appendChild(makeValueChange("Widget values", JSON.stringify(changes.widgetValues.from), JSON.stringify(changes.widgetValues.to)));
+                    wrap.appendChild(d);
+                }
+            }
+            if (changes.properties) {
+                for (const pv of changes.properties) {
+                    const d = document.createElement("div");
+                    d.className = "snap-diff-change-detail";
+                    d.appendChild(makeValueChange(`prop.${pv.key}`, pv.from, pv.to));
+                    wrap.appendChild(d);
+                }
+            }
+            return wrap;
+        });
+        if (modSec) body.appendChild(modSec);
+
+        // Link changes (combined section)
+        const allLinkChanges = [
+            ...diff.addedLinks.map(l => ({ ...l, action: "added" })),
+            ...diff.removedLinks.map(l => ({ ...l, action: "removed" })),
+        ];
+        const linkSec = makeSection("Link Changes", allLinkChanges.length, allLinkChanges, (l) => {
+            const el = document.createElement("div");
+            el.className = `snap-diff-link-entry ${l.action === "added" ? "snap-diff-added" : "snap-diff-removed"}`;
+            const srcInfo = allNodes.get(l.srcNodeId) || { title: `#${l.srcNodeId}` };
+            const destInfo = allNodes.get(l.destNodeId) || { title: `#${l.destNodeId}` };
+            const prefix = l.action === "added" ? "+" : "\u2212";
+            el.textContent = `${prefix} ${srcInfo.title} [${l.srcSlot}] \u2192 ${destInfo.title} [${l.destSlot}]${l.type ? ` (${l.type})` : ""}`;
+            return el;
+        });
+        if (linkSec) body.appendChild(linkSec);
+    }
+
+    function makeValueChange(label, oldVal, newVal) {
+        const span = document.createElement("span");
+        const lbl = document.createElement("span");
+        lbl.textContent = `${label}: `;
+        const oldSpan = document.createElement("span");
+        oldSpan.className = "snap-diff-val-old";
+        oldSpan.textContent = truncateVal(oldVal);
+        const arrow = document.createElement("span");
+        arrow.textContent = " \u2192 ";
+        const newSpan = document.createElement("span");
+        newSpan.className = "snap-diff-val-new";
+        newSpan.textContent = truncateVal(newVal);
+        span.appendChild(lbl);
+        span.appendChild(oldSpan);
+        span.appendChild(arrow);
+        span.appendChild(newSpan);
+        return span;
+    }
+
+    function truncateVal(v) {
+        const s = String(v ?? "");
+        return s.length > 80 ? s.slice(0, 77) + "\u2026" : s;
+    }
+
+    modal.appendChild(hdr);
+    modal.appendChild(summaryBar);
+    modal.appendChild(body);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    function dismiss() {
+        overlay.remove();
+        document.removeEventListener("keydown", onKey);
+    }
+
+    function onKey(e) {
+        if (e.key === "Escape") dismiss();
+    }
+    document.addEventListener("keydown", onKey);
+
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) dismiss();
+    });
 }
 
 // ─── Snapshot Capture ────────────────────────────────────────────────
@@ -544,6 +915,15 @@ async function restoreSnapshot(record) {
 }
 
 async function swapSnapshot(record) {
+    // Warn when swapping in a snapshot from a different workflow
+    const currentKey = getWorkflowKey();
+    if (record.workflowKey && record.workflowKey !== currentKey) {
+        const confirmed = await showConfirmDialog(
+            `This snapshot belongs to a different workflow ("${record.workflowKey}").\nSwap it into the current workflow anyway?`
+        );
+        if (!confirmed) return;
+    }
+
     // Auto-save current state before swapping (so user can get back),
     // but skip if the graph is already a saved snapshot (browsing between old ones)
     const prevCurrentId = currentSnapshotId;
@@ -686,6 +1066,58 @@ const CSS = `
 .snap-item-meta {
     font-size: 10px;
     color: var(--descrip-text, #666);
+}
+.snap-item-label-input {
+    width: 100%;
+    padding: 2px 6px;
+    border: 1px solid var(--border-color, #444);
+    border-radius: 4px;
+    background: var(--comfy-menu-bg, #2a2a2a);
+    color: var(--input-text, #ccc);
+    font-size: 13px;
+    font-weight: 600;
+    outline: none;
+    box-sizing: border-box;
+}
+.snap-btn-note {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 3px 4px;
+    opacity: 0.5;
+    transition: opacity 0.15s;
+}
+.snap-btn-note:hover {
+    opacity: 1;
+}
+.snap-btn-note.has-note {
+    opacity: 1;
+    filter: sepia(1) saturate(3) hue-rotate(15deg) brightness(1.1);
+}
+.snap-item-notes {
+    font-size: 10px;
+    font-style: italic;
+    color: var(--descrip-text, #888);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+.snap-item-notes-input {
+    width: 100%;
+    padding: 4px 6px;
+    border: 1px solid var(--border-color, #444);
+    border-radius: 4px;
+    background: var(--comfy-menu-bg, #2a2a2a);
+    color: var(--input-text, #ccc);
+    font-size: 11px;
+    outline: none;
+    resize: vertical;
+    min-height: 32px;
+    max-height: 80px;
+    box-sizing: border-box;
+    font-family: inherit;
 }
 .snap-item-actions {
     display: flex;
@@ -972,6 +1404,153 @@ const CSS = `
     font-family: system-ui, sans-serif;
     line-height: 32px;
 }
+.snap-diff-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.snap-diff-modal {
+    width: min(720px, 90vw);
+    max-height: 80vh;
+    background: #1e1e2e;
+    border: 1px solid #444;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    color: #ccc;
+}
+.snap-diff-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid #444;
+    font-weight: 700;
+    font-size: 14px;
+}
+.snap-diff-header button {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.snap-diff-header button:hover {
+    background: #333;
+    color: #fff;
+}
+.snap-diff-summary {
+    display: flex;
+    gap: 6px;
+    padding: 8px 14px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid #333;
+}
+.snap-diff-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 14px 14px;
+}
+.snap-diff-section {
+    margin-bottom: 8px;
+}
+.snap-diff-section-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 6px 4px;
+    font-weight: 600;
+    font-size: 12px;
+    color: #aaa;
+    user-select: none;
+    border-radius: 4px;
+}
+.snap-diff-section-header:hover {
+    background: #2a2a3a;
+}
+.snap-diff-section-arrow {
+    font-size: 10px;
+    width: 14px;
+    text-align: center;
+}
+.snap-diff-section-body {
+    padding-left: 20px;
+}
+.snap-diff-node-entry {
+    padding: 4px 6px;
+    margin: 2px 0;
+    border-radius: 4px;
+    font-size: 12px;
+}
+.snap-diff-node-entry.snap-diff-added {
+    color: #22c55e;
+    background: rgba(34,197,94,0.08);
+}
+.snap-diff-node-entry.snap-diff-removed {
+    color: #dc2626;
+    background: rgba(220,38,38,0.08);
+}
+.snap-diff-node-entry.snap-diff-neutral {
+    color: #f59e0b;
+    background: rgba(245,158,11,0.06);
+}
+.snap-diff-change-detail {
+    padding: 2px 0 2px 16px;
+    font-size: 11px;
+    color: #999;
+}
+.snap-diff-val-old {
+    color: #dc2626;
+    text-decoration: line-through;
+}
+.snap-diff-val-new {
+    color: #22c55e;
+}
+.snap-diff-link-entry {
+    padding: 3px 6px;
+    margin: 2px 0;
+    border-radius: 4px;
+    font-size: 12px;
+}
+.snap-diff-link-entry.snap-diff-added {
+    color: #22c55e;
+    background: rgba(34,197,94,0.08);
+}
+.snap-diff-link-entry.snap-diff-removed {
+    color: #dc2626;
+    background: rgba(220,38,38,0.08);
+}
+.snap-diff-empty {
+    text-align: center;
+    padding: 32px 16px;
+    color: #666;
+    font-size: 13px;
+}
+.snap-item.snap-diff-base {
+    outline: 2px solid #6d28d9;
+    outline-offset: -2px;
+    border-radius: 4px;
+}
+.snap-btn-diff {
+    background: #6d28d9;
+    color: #fff;
+}
+.snap-btn-diff:hover:not(:disabled) {
+    background: #5b21b6;
+}
+.snap-btn-diff.snap-diff-base-active {
+    box-shadow: 0 0 6px rgba(109,40,217,0.6);
+}
 `;
 
 const CHANGE_TYPE_ICONS = {
@@ -1239,7 +1818,7 @@ async function buildSidebar(el) {
 
     function filterItems(term) {
         for (const entry of itemEntries) {
-            const match = !term || entry.label.toLowerCase().includes(term);
+            const match = !term || entry.label.toLowerCase().includes(term) || entry.notes.toLowerCase().includes(term);
             entry.element.style.display = match ? "" : "none";
         }
     }
@@ -1302,6 +1881,9 @@ async function buildSidebar(el) {
         for (const rec of records) {
             const item = document.createElement("div");
             item.className = rec.source === "node" ? "snap-item snap-item-node" : "snap-item";
+            if (diffBaseSnapshot && diffBaseSnapshot.id === rec.id) {
+                item.classList.add("snap-diff-base");
+            }
 
             const info = document.createElement("div");
             info.className = "snap-item-info";
@@ -1315,6 +1897,52 @@ async function buildSidebar(el) {
                 badge.textContent = "Node";
                 labelDiv.appendChild(badge);
             }
+            labelDiv.addEventListener("dblclick", (e) => {
+                e.stopPropagation();
+                const originalLabel = rec.label;
+                const input = document.createElement("input");
+                input.type = "text";
+                input.className = "snap-item-label-input";
+                input.value = originalLabel;
+                labelDiv.textContent = "";
+                labelDiv.appendChild(input);
+                input.select();
+                input.focus();
+                let committed = false;
+                const commit = async () => {
+                    if (committed) return;
+                    committed = true;
+                    const newLabel = input.value.trim() || originalLabel;
+                    if (newLabel !== originalLabel) {
+                        rec.label = newLabel;
+                        await db_put(rec);
+                        await refresh();
+                    } else {
+                        labelDiv.textContent = originalLabel;
+                        if (rec.source === "node") {
+                            const b = document.createElement("span");
+                            b.className = "snap-node-badge";
+                            b.textContent = "Node";
+                            labelDiv.appendChild(b);
+                        }
+                    }
+                };
+                input.addEventListener("keydown", (ev) => {
+                    if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+                    if (ev.key === "Escape") {
+                        ev.preventDefault();
+                        committed = true;
+                        labelDiv.textContent = originalLabel;
+                        if (rec.source === "node") {
+                            const b = document.createElement("span");
+                            b.className = "snap-node-badge";
+                            b.textContent = "Node";
+                            labelDiv.appendChild(b);
+                        }
+                    }
+                });
+                input.addEventListener("blur", commit);
+            });
 
             const time = document.createElement("div");
             time.className = "snap-item-time";
@@ -1329,13 +1957,53 @@ async function buildSidebar(el) {
             const changeLabel = (CHANGE_TYPE_ICONS[rec.changeType] || CHANGE_TYPE_ICONS.unknown).label;
             meta.textContent = `${rec.nodeCount} nodes \u00b7 ${changeLabel}`;
 
+            const notesDiv = document.createElement("div");
+            notesDiv.className = "snap-item-notes";
+            if (rec.notes) {
+                notesDiv.textContent = rec.notes;
+                notesDiv.title = rec.notes;
+            } else {
+                notesDiv.style.display = "none";
+            }
+
             info.appendChild(labelDiv);
             info.appendChild(time);
             info.appendChild(date);
             info.appendChild(meta);
+            info.appendChild(notesDiv);
 
             const actions = document.createElement("div");
             actions.className = "snap-item-actions";
+
+            const noteBtn = document.createElement("button");
+            noteBtn.className = "snap-btn-note" + (rec.notes ? " has-note" : "");
+            noteBtn.textContent = "\uD83D\uDCDD";
+            noteBtn.title = rec.notes ? "Edit note" : "Add note";
+            noteBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                // Toggle: if textarea already open, close it
+                const existing = info.querySelector(".snap-item-notes-input");
+                if (existing) { existing.remove(); return; }
+                const textarea = document.createElement("textarea");
+                textarea.className = "snap-item-notes-input";
+                textarea.value = rec.notes || "";
+                info.appendChild(textarea);
+                textarea.focus();
+                let saved = false;
+                const saveNote = async () => {
+                    if (saved) return;
+                    saved = true;
+                    const newNotes = textarea.value.trim();
+                    rec.notes = newNotes || undefined;
+                    await db_put(rec);
+                    await refresh();
+                };
+                textarea.addEventListener("keydown", (ev) => {
+                    if (ev.key === "Enter" && ev.ctrlKey) { ev.preventDefault(); textarea.blur(); }
+                    if (ev.key === "Escape") { ev.preventDefault(); saved = true; textarea.remove(); }
+                });
+                textarea.addEventListener("blur", saveNote);
+            });
 
             const lockBtn = document.createElement("button");
             lockBtn.className = rec.locked ? "snap-btn-lock snap-btn-locked" : "snap-btn-lock";
@@ -1379,6 +2047,50 @@ async function buildSidebar(el) {
                 await refresh();
             });
 
+            const diffBtn = document.createElement("button");
+            diffBtn.className = "snap-btn-diff" + (diffBaseSnapshot && diffBaseSnapshot.id === rec.id ? " snap-diff-base-active" : "");
+            diffBtn.textContent = "Diff";
+            diffBtn.title = diffBaseSnapshot && diffBaseSnapshot.id !== rec.id
+                ? `Compare '${diffBaseSnapshot.label}' vs this snapshot`
+                : "Compare vs current workflow (Shift+click to set as base)";
+            diffBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                if (e.shiftKey) {
+                    // Toggle base selection
+                    if (diffBaseSnapshot && diffBaseSnapshot.id === rec.id) {
+                        diffBaseSnapshot = null;
+                        showToast("Diff base cleared", "info");
+                    } else {
+                        diffBaseSnapshot = rec;
+                        showToast(`Diff base set: "${rec.label}"`, "info");
+                    }
+                    refresh();
+                    return;
+                }
+                // Normal click
+                let baseGraph, targetGraph, baseLabel, targetLabel;
+                if (diffBaseSnapshot && diffBaseSnapshot.id !== rec.id) {
+                    // Two-snapshot compare: base vs this
+                    baseGraph = diffBaseSnapshot.graphData || {};
+                    targetGraph = rec.graphData || {};
+                    baseLabel = diffBaseSnapshot.label;
+                    targetLabel = rec.label;
+                    diffBaseSnapshot = null;
+                    refresh(); // clear highlight
+                } else {
+                    // Compare this snapshot vs current live workflow
+                    baseGraph = rec.graphData || {};
+                    targetGraph = getGraphData() || {};
+                    baseLabel = rec.label;
+                    targetLabel = "Current Workflow";
+                }
+                const diff = computeDetailedDiff(baseGraph, targetGraph);
+                const allNodes = buildNodeLookup(baseGraph, targetGraph);
+                showDiffModal(baseLabel, targetLabel, diff, allNodes);
+            });
+
+            actions.appendChild(noteBtn);
+            actions.appendChild(diffBtn);
             actions.appendChild(lockBtn);
             actions.appendChild(swapBtn);
             actions.appendChild(restoreBtn);
@@ -1388,7 +2100,7 @@ async function buildSidebar(el) {
             item.appendChild(actions);
             list.appendChild(item);
 
-            itemEntries.push({ element: item, label: rec.label });
+            itemEntries.push({ element: item, label: rec.label, notes: rec.notes || "" });
         }
 
         // Re-apply current search filter to newly built items
@@ -1495,7 +2207,9 @@ function buildTimeline() {
             }
 
             // Native tooltip with change-type description
-            marker.title = `${rec.label} — ${formatTime(rec.timestamp)}\n${iconInfo.label}`;
+            let tip = `${rec.label} — ${formatTime(rec.timestamp)}\n${iconInfo.label}`;
+            if (rec.notes) tip += `\n${rec.notes}`;
+            marker.title = tip;
 
             // Click to swap
             marker.addEventListener("click", () => {
@@ -1632,6 +2346,7 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                             viewingWorkflowKey = null;
                             activeSnapshotId = null;
                             currentSnapshotId = null;
+                            diffBaseSnapshot = null;
                             if (sidebarRefresh) {
                                 sidebarRefresh(true).catch(() => {});
                             }

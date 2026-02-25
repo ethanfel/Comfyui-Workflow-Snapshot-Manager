@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://registry.comfy.org/publishers/ethanfel/nodes/comfyui-snapshot-manager"><img src="https://img.shields.io/badge/ComfyUI-Registry-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=" alt="ComfyUI Registry"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/></a>
-  <img src="https://img.shields.io/badge/version-2.3.0-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-2.4.0-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/ComfyUI-Extension-purple" alt="ComfyUI Extension"/>
 </p>
 
@@ -33,6 +33,7 @@
 - **Active & current markers** — When you swap to a snapshot, the timeline highlights where you came from (green dot) and where you are (white ring)
 - **Auto-save before swap** — Swapping to an older snapshot automatically saves your current state first, so you can always get back; browsing between saved snapshots skips redundant saves
 - **Ctrl+S shortcut** — Press Ctrl+S (or Cmd+S on Mac) to take a manual snapshot alongside ComfyUI's own save
+- **Diff view** — Compare any snapshot against the current workflow (one click) or two snapshots against each other (Shift+click to set base); see added/removed/modified nodes, widget value changes, and rewired connections in a single modal
 - **Lock/pin snapshots** — Protect important snapshots from auto-pruning and "Clear All" with a single click
 - **Concurrency-safe** — Lock guard prevents double-click issues during restore
 - **Server-side storage** — Snapshots persist on the ComfyUI server's filesystem, accessible from any browser
@@ -140,6 +141,26 @@ Press **Ctrl+S** (or **Cmd+S** on Mac) to take a manual snapshot. This works alo
 
 - Click **&times;** on any snapshot to delete it individually (locked snapshots prompt for confirmation)
 - Click **Clear All Snapshots** in the footer to remove all unlocked snapshots for the current workflow (locked snapshots are preserved)
+
+### 12. Diff View
+
+Compare two snapshots — or a snapshot against the current workflow — to see exactly what changed without touching the graph.
+
+**One-click (vs current workflow):** Click **Diff** on any snapshot to see what changed between that snapshot and your current live workflow.
+
+**Two-snapshot compare:** **Shift+click** **Diff** on snapshot A to set it as the base (purple outline + toast confirmation), then click **Diff** on snapshot B to compare A → B. The base clears after comparison.
+
+The diff modal shows:
+
+| Section | Details |
+|---------|---------|
+| **Summary pills** | Colored counts — green (added), red (removed), amber (modified), blue (links) |
+| **Added Nodes** | Nodes present in the target but not the base |
+| **Removed Nodes** | Nodes present in the base but not the target |
+| **Modified Nodes** | Nodes with changed position, size, title, mode, widget values, or properties — each change shown as old (red strikethrough) → new (green) |
+| **Link Changes** | Added/removed connections with node names and slot indices |
+
+Sections are collapsible (click the header to toggle). If the two snapshots are identical, a "No differences found." message is shown. Dismiss the modal with **Escape**, the **X** button, or by clicking outside.
 
 ## Settings
 
