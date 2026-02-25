@@ -2308,6 +2308,9 @@ async function buildSidebar(el) {
             // db_deleteAllForWorkflow already toasts on error
         }
         await refresh(true);
+        if (timelineRefresh) {
+            timelineRefresh().catch(() => {});
+        }
     });
     footer.appendChild(clearBtn);
 
@@ -2564,6 +2567,9 @@ async function buildSidebar(el) {
                 await db_delete(rec.workflowKey, rec.id);
                 pickerDirty = true;
                 await refresh();
+                if (timelineRefresh) {
+                    timelineRefresh().catch(() => {});
+                }
             });
 
             const diffBtn = document.createElement("button");
