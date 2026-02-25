@@ -1582,6 +1582,14 @@ const CSS = `
 .snap-item-node {
     border-left: 3px solid #6d28d9;
 }
+.snap-item-active {
+    background: rgba(255,255,255,0.06);
+    border-left: 3px solid #fff;
+}
+.snap-item-current {
+    background: rgba(16,185,129,0.06);
+    border-left: 3px solid #10b981;
+}
 .snap-node-badge {
     display: inline-block;
     font-size: 9px;
@@ -2386,6 +2394,12 @@ async function buildSidebar(el) {
             item.className = rec.source === "node" ? "snap-item snap-item-node" : "snap-item";
             if (diffBaseSnapshot && diffBaseSnapshot.id === rec.id) {
                 item.classList.add("snap-diff-base");
+            }
+            if (rec.id === activeSnapshotId) {
+                item.classList.add("snap-item-active");
+            }
+            if (rec.id === currentSnapshotId) {
+                item.classList.add("snap-item-current");
             }
 
             const info = document.createElement("div");
