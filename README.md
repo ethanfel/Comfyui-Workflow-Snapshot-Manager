@@ -79,7 +79,7 @@ Each snapshot has action buttons:
 
 | Button | Action |
 |--------|--------|
-| **Preview** (👁) | Opens a full-size SVG preview of the workflow graph |
+| **Preview** (eye icon) | Opens a full-size SVG preview of the workflow graph |
 | **Lock** | Toggles lock protection (padlock icon) |
 | **Swap** | Replaces the current workflow in-place (same tab) |
 | **Restore** | Opens the snapshot as a new workflow |
@@ -171,7 +171,7 @@ Visually inspect any snapshot without restoring or swapping it.
 
 **Hover tooltip:** Hover over any snapshot in the sidebar list. After 200ms, a small SVG preview appears next to the item showing the graph layout with nodes, links, and groups. Move the mouse away to dismiss.
 
-**Preview modal:** Click the **eye button** (👁) on any snapshot to open a full-size preview modal showing the complete graph with node titles, colored link beziers, input/output slot dots, and group overlays. Dismiss with **Escape**, the **X** button, or by clicking outside.
+**Preview modal:** Click the **eye button** on any snapshot to open a full-size preview modal showing the complete graph with node titles, colored link beziers, input/output slot dots, and group overlays. Dismiss with **Escape**, the **X** button, or by clicking outside.
 
 The SVG renderer draws nodes with their stored position, size, and colors. Links are rendered as bezier curves colored by type (blue for IMAGE, orange for CLIP, purple for MODEL, etc.). Collapsed nodes appear as thin title-only strips. Thumbnails (hover tooltips) auto-simplify by hiding labels and slot dots for clarity at small sizes.
 

@@ -1469,15 +1469,19 @@ const CSS = `
     cursor: pointer;
     font-size: 13px;
     padding: 3px 4px;
+    color: var(--descrip-text, #888);
     opacity: 0.5;
-    transition: opacity 0.15s;
+    transition: opacity 0.15s, color 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 .snap-btn-note:hover {
     opacity: 1;
 }
 .snap-btn-note.has-note {
     opacity: 1;
-    filter: sepia(1) saturate(3) hue-rotate(15deg) brightness(1.1);
+    color: #f59e0b;
 }
 .snap-item-notes {
     font-size: 10px;
@@ -1539,7 +1543,9 @@ const CSS = `
     color: var(--descrip-text, #aaa);
     font-size: 13px;
     min-width: 28px;
-    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 .snap-btn-lock.snap-btn-locked {
     background: #2563eb;
@@ -2026,7 +2032,9 @@ const CSS = `
     color: #fff;
     font-size: 13px;
     min-width: 28px;
-    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 .snap-btn-preview:hover:not(:disabled) {
     background: #475569;
@@ -2472,7 +2480,7 @@ async function buildSidebar(el) {
 
             const noteBtn = document.createElement("button");
             noteBtn.className = "snap-btn-note" + (rec.notes ? " has-note" : "");
-            noteBtn.textContent = "\uD83D\uDCDD";
+            noteBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 11.5V14h2.5L12.06 6.44 9.56 3.94 2 11.5zM14.35 4.15a.67.67 0 000-.94l-1.56-1.56a.67.67 0 00-.94 0L10.5 3l2.5 2.5 1.35-1.35z" fill="currentColor"/></svg>';
             noteBtn.title = rec.notes ? "Edit note" : "Add note";
             noteBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
@@ -2502,7 +2510,9 @@ async function buildSidebar(el) {
 
             const lockBtn = document.createElement("button");
             lockBtn.className = rec.locked ? "snap-btn-lock snap-btn-locked" : "snap-btn-lock";
-            lockBtn.textContent = rec.locked ? "\uD83D\uDD12" : "\uD83D\uDD13";
+            lockBtn.innerHTML = rec.locked
+                ? '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 016 0v2" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>'
+                : '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 016 0" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>';
             lockBtn.title = rec.locked ? "Unlock snapshot" : "Lock snapshot";
             lockBtn.addEventListener("click", async () => {
                 rec.locked = !rec.locked;
@@ -2586,7 +2596,7 @@ async function buildSidebar(el) {
 
             const previewBtn = document.createElement("button");
             previewBtn.className = "snap-btn-preview";
-            previewBtn.textContent = "\uD83D\uDC41";
+            previewBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8 3C4 3 1.5 8 1.5 8s2.5 5 6.5 5 6.5-5 6.5-5S12 3 8 3z" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="8" cy="8" r="2" fill="currentColor"/></svg>';
             previewBtn.title = "Preview workflow graph";
             previewBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
