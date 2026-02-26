@@ -2833,14 +2833,6 @@ async function buildSidebar(el) {
                 if (entry.workflowKey === currentKey) {
                     viewingWorkflowKey = null;
                 } else {
-                    // Open the workflows sidebar so the user can switch
-                    try {
-                        const sidebarStore = app.extensionManager?.sidebarTab;
-                        const store = sidebarStore?.value ?? sidebarStore;
-                        if (store?.toggleSidebarTab) {
-                            store.toggleSidebarTab("workflows");
-                        }
-                    } catch { /* ignore */ }
                     viewingWorkflowKey = entry.workflowKey;
                 }
                 activeBranchSelections.clear();
