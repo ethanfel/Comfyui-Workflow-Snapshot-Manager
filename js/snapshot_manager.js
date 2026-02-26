@@ -1453,16 +1453,24 @@ async function captureSnapshot(label = "Auto") {
     try {
         await db_put(record);
         if (branchingEnabled) {
-            // Compute protected IDs: ancestors of this capture + fork points
+            // Compute protected IDs: ancestors of this capture + fork points + ancestors of locked snapshots
             const allRecs = await db_getAllForWorkflow(workflowKey);
             const tempTree = buildSnapshotTree(allRecs);
-            const ancestors = getAncestorIds(record.id, tempTree.parentOf);
+            const protectedIds = getAncestorIds(record.id, tempTree.parentOf);
             // Protect fork points (snapshots with >1 child)
             for (const [pid, children] of tempTree.childrenOf) {
-                if (children.length > 1) ancestors.add(pid);
+                if (children.length > 1) protectedIds.add(pid);
             }
-            ancestors.add(record.id); // protect the just-captured snapshot
-            await pruneSnapshots(workflowKey, [...ancestors]);
+            // Protect ancestors of locked snapshots to prevent orphan branches
+            for (const rec of allRecs) {
+                if (rec.locked) {
+                    for (const aid of getAncestorIds(rec.id, tempTree.parentOf)) {
+                        protectedIds.add(aid);
+                    }
+                }
+            }
+            protectedIds.add(record.id); // protect the just-captured snapshot
+            await pruneSnapshots(workflowKey, [...protectedIds]);
         } else {
             await pruneSnapshots(workflowKey);
         }
@@ -1525,12 +1533,19 @@ async function captureNodeSnapshot(label = "Node Trigger") {
     try {
         await db_put(record);
         if (branchingEnabled) {
-            // Compute protected IDs: ancestors + fork points
+            // Compute protected IDs: ancestors + fork points + ancestors of locked snapshots
             const allRecs = await db_getAllForWorkflow(workflowKey);
             const tempTree = buildSnapshotTree(allRecs);
             const protectedNodeIds = getAncestorIds(record.id, tempTree.parentOf);
             for (const [pid, children] of tempTree.childrenOf) {
                 if (children.length > 1) protectedNodeIds.add(pid);
+            }
+            for (const rec of allRecs) {
+                if (rec.locked) {
+                    for (const aid of getAncestorIds(rec.id, tempTree.parentOf)) {
+                        protectedNodeIds.add(aid);
+                    }
+                }
             }
             protectedNodeIds.add(record.id);
             await pruneNodeSnapshots(workflowKey, [...protectedNodeIds]);
