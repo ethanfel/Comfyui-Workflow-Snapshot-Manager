@@ -45,6 +45,7 @@ let sidebarTooltipEl = null;   // tooltip element for sidebar hover previews
 const lastCapturedIdMap = new Map(); // workflowKey -> id of most recent capture (for parentId chaining)
 const activeBranchSelections = new Map(); // forkPointId -> selected child index
 let branchingEnabled = true;
+let timelineExpanded = false;
 const sessionWorkflows = new Map(); // workflowKey -> { firstSeen, lastSeen }
 
 // ─── Server API Layer ───────────────────────────────────────────────
@@ -970,6 +971,58 @@ function getAncestorIds(snapshotId, parentOf) {
         ancestors.add(current);
     }
     return ancestors;
+}
+
+function getAllBranches(tree) {
+    const branches = [];
+    function walk(nodeId, path) {
+        const record = tree.byId.get(nodeId);
+        if (!record) return;
+        const currentPath = [...path, record];
+        const children = tree.childrenOf.get(nodeId);
+        if (!children || children.length === 0) {
+            branches.push(currentPath);
+        } else {
+            for (const child of children) {
+                walk(child.id, currentPath);
+            }
+        }
+    }
+    for (const root of tree.roots) {
+        walk(root.id, []);
+    }
+    return branches;
+}
+
+function selectBranchContaining(snapshotId, tree) {
+    // Walk from snapshot to root, at each fork set activeBranchSelections
+    const pathToRoot = [];
+    const visited = new Set();
+    let current = snapshotId;
+    while (current) {
+        if (visited.has(current)) break; // cycle detection
+        visited.add(current);
+        pathToRoot.push(current);
+        current = tree.parentOf.get(current) || null;
+    }
+    pathToRoot.reverse(); // now root → snapshot
+
+    // Handle multiple roots
+    if (pathToRoot.length > 0 && tree.roots.length > 1) {
+        const rootId = pathToRoot[0];
+        const rootIdx = tree.roots.findIndex(r => r.id === rootId);
+        if (rootIdx >= 0) activeBranchSelections.set("__root__", rootIdx);
+    }
+
+    for (let i = 0; i < pathToRoot.length - 1; i++) {
+        const parentId = pathToRoot[i];
+        const childId = pathToRoot[i + 1];
+        const children = tree.childrenOf.get(parentId);
+        if (children && children.length > 1) {
+            const idx = children.findIndex(c => c.id === childId);
+            if (idx >= 0) activeBranchSelections.set(parentId, idx);
+        }
+    }
 }
 
 // ─── Restore Lock ───────────────────────────────────────────────────
@@ -2106,6 +2159,40 @@ const CSS = `
 .snap-timeline-branch-btn:hover {
     opacity: 1;
     background: rgba(59, 130, 246, 0.2);
+}
+.snap-timeline-expand-btn {
+    font-size: 13px;
+    padding: 2px 6px;
+    line-height: 1;
+}
+.snap-timeline-expanded {
+    height: auto;
+    align-items: flex-start;
+    padding: 8px 16px;
+}
+.snap-timeline-expanded .snap-timeline-track {
+    flex-direction: column;
+    gap: 4px;
+    height: auto;
+    max-height: 180px;
+    overflow-y: auto;
+    align-items: stretch;
+}
+.snap-timeline-branch-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    min-height: 24px;
+    border-left: 2px solid transparent;
+}
+.snap-timeline-branch-row-active {
+    background: rgba(59, 130, 246, 0.12);
+    border-left-color: #3b82f6;
+}
+.snap-timeline-marker-dimmed {
+    opacity: 0.35;
 }
 .snap-diff-overlay {
     position: fixed;
@@ -3447,14 +3534,67 @@ function buildTimeline() {
         snapBtn.disabled = false;
     });
 
+    const expandBtn = document.createElement("button");
+    expandBtn.className = "snap-timeline-snap-btn snap-timeline-expand-btn";
+    expandBtn.textContent = "\u25BE";
+    expandBtn.title = "Expand timeline to show all branches";
+    expandBtn.addEventListener("click", () => {
+        timelineExpanded = !timelineExpanded;
+        expandBtn.textContent = timelineExpanded ? "\u25B4" : "\u25BE";
+        expandBtn.title = timelineExpanded ? "Collapse timeline" : "Expand timeline to show all branches";
+        bar.classList.toggle("snap-timeline-expanded", timelineExpanded);
+        refresh();
+    });
+
     bar.appendChild(track);
+    bar.appendChild(expandBtn);
     bar.appendChild(snapBtn);
 
     canvasParent.appendChild(bar);
     timelineEl = bar;
 
+    function buildMarker(rec, { dimmed = false, onClickBranch = null } = {}) {
+        const marker = document.createElement("div");
+        marker.className = "snap-timeline-marker";
+
+        const iconInfo = CHANGE_TYPE_ICONS[rec.changeType] || CHANGE_TYPE_ICONS.unknown;
+        marker.style.setProperty("--snap-marker-color", iconInfo.color);
+        marker.innerHTML = iconInfo.svg;
+
+        if (rec.source === "node") {
+            marker.classList.add("snap-timeline-marker-node");
+            marker.style.setProperty("--snap-marker-color", "#6d28d9");
+        }
+        if (rec.locked) marker.classList.add("snap-timeline-marker-locked");
+        if (rec.id === activeSnapshotId) marker.classList.add("snap-timeline-marker-active");
+        if (rec.id === currentSnapshotId) {
+            marker.classList.add("snap-timeline-marker-current");
+            marker.style.setProperty("--snap-marker-color", "#10b981");
+        }
+        if (dimmed) marker.classList.add("snap-timeline-marker-dimmed");
+
+        let tip = `${rec.label} — ${formatTime(rec.timestamp)}\n${iconInfo.label}`;
+        if (rec.notes) tip += `\n${rec.notes}`;
+        marker.title = tip;
+
+        marker.addEventListener("click", () => {
+            if (onClickBranch) onClickBranch();
+            swapSnapshot(rec);
+        });
+
+        return marker;
+    }
+
     async function refresh() {
         if (!showTimeline) return;
+
+        // Hide/show expand button based on branching
+        expandBtn.style.display = branchingEnabled ? "" : "none";
+        if (!branchingEnabled && timelineExpanded) {
+            timelineExpanded = false;
+            bar.classList.remove("snap-timeline-expanded");
+            expandBtn.textContent = "\u25BE";
+        }
 
         const allRecords = await db_getAllForWorkflow(getWorkflowKey());
 
@@ -3468,62 +3608,58 @@ function buildTimeline() {
             return;
         }
 
-        let records;
         let tree = null;
+        if (branchingEnabled) {
+            tree = buildSnapshotTree(allRecords);
+        }
+
+        // ── Expanded mode: one row per branch ──
+        if (timelineExpanded && branchingEnabled) {
+            const allBranches = getAllBranches(tree);
+            const currentPath = getDisplayPath(tree, activeBranchSelections);
+            const currentIds = new Set(currentPath.map(r => r.id));
+
+            // Determine which branch is the active one
+            const currentLeafId = currentPath.length > 0 ? currentPath[currentPath.length - 1].id : null;
+
+            for (const branch of allBranches) {
+                const row = document.createElement("div");
+                row.className = "snap-timeline-branch-row";
+
+                const branchLeafId = branch[branch.length - 1].id;
+                const isActiveBranch = branchLeafId === currentLeafId;
+                if (isActiveBranch) row.classList.add("snap-timeline-branch-row-active");
+
+                for (const rec of branch) {
+                    const isSharedAncestor = !isActiveBranch && currentIds.has(rec.id);
+                    const marker = buildMarker(rec, {
+                        dimmed: isSharedAncestor,
+                        onClickBranch: isActiveBranch ? null : () => {
+                            selectBranchContaining(branchLeafId, tree);
+                        },
+                    });
+                    row.appendChild(marker);
+                }
+
+                track.appendChild(row);
+            }
+            return;
+        }
+
+        // ── Collapsed mode (default) ──
+        let records;
         let forkPointSet = new Set();
         if (branchingEnabled) {
-            // Show only current branch's markers
-            tree = buildSnapshotTree(allRecords);
             records = getDisplayPath(tree, activeBranchSelections);
-
             for (const [parentId, children] of tree.childrenOf) {
                 if (children.length > 1) forkPointSet.add(parentId);
             }
         } else {
-            // Flat: all records in timestamp order
             records = [...allRecords].sort((a, b) => a.timestamp - b.timestamp);
         }
 
         for (const rec of records) {
-            const marker = document.createElement("div");
-            marker.className = "snap-timeline-marker";
-
-            // Change-type icon and color
-            const iconInfo = CHANGE_TYPE_ICONS[rec.changeType] || CHANGE_TYPE_ICONS.unknown;
-            marker.style.setProperty("--snap-marker-color", iconInfo.color);
-            marker.innerHTML = iconInfo.svg;
-
-            // Node snapshot styling — override color to purple but keep the SVG icon
-            if (rec.source === "node") {
-                marker.classList.add("snap-timeline-marker-node");
-                marker.style.setProperty("--snap-marker-color", "#6d28d9");
-            }
-
-            // Locked snapshot styling
-            if (rec.locked) {
-                marker.classList.add("snap-timeline-marker-locked");
-            }
-
-            // Active snapshot styling (the one swapped TO)
-            if (rec.id === activeSnapshotId) {
-                marker.classList.add("snap-timeline-marker-active");
-            }
-
-            // Current snapshot styling (auto-saved "you were here" bookmark)
-            if (rec.id === currentSnapshotId) {
-                marker.classList.add("snap-timeline-marker-current");
-                marker.style.setProperty("--snap-marker-color", "#10b981");
-            }
-
-            // Native tooltip with change-type description
-            let tip = `${rec.label} — ${formatTime(rec.timestamp)}\n${iconInfo.label}`;
-            if (rec.notes) tip += `\n${rec.notes}`;
-            marker.title = tip;
-
-            // Click to swap
-            marker.addEventListener("click", () => {
-                swapSnapshot(rec);
-            });
+            const marker = buildMarker(rec);
 
             // Fork point: vertical stack — up arrow, marker, down arrow
             if (branchingEnabled && forkPointSet.has(rec.id)) {
@@ -3533,10 +3669,8 @@ function buildTimeline() {
                 const group = document.createElement("div");
                 group.className = "snap-timeline-fork-group";
 
-                // Arrow color matches the marker
                 const arrowColor = marker.style.getPropertyValue("--snap-marker-color") || "#3b82f6";
 
-                // Up arrow (previous branch)
                 const upBtn = document.createElement("button");
                 upBtn.className = "snap-timeline-branch-btn";
                 upBtn.textContent = "\u25B2";
@@ -3550,7 +3684,6 @@ function buildTimeline() {
                     if (sidebarRefresh) sidebarRefresh().catch(() => {});
                 });
 
-                // Down arrow (next branch)
                 const downBtn = document.createElement("button");
                 downBtn.className = "snap-timeline-branch-btn";
                 downBtn.textContent = "\u25BC";
