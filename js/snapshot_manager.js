@@ -2004,21 +2004,6 @@ const CSS = `
     font-size: 11px;
     color: var(--descrip-text, #888);
 }
-.snap-workflow-load-btn {
-    flex-shrink: 0;
-    margin-left: 6px;
-    padding: 1px 8px;
-    font-size: 10px;
-    border: 1px solid rgba(59, 130, 246, 0.4);
-    border-radius: 3px;
-    background: rgba(59, 130, 246, 0.15);
-    color: #3b82f6;
-    cursor: pointer;
-    line-height: 1.4;
-}
-.snap-workflow-load-btn:hover {
-    background: rgba(59, 130, 246, 0.3);
-}
 .snap-workflow-viewing-banner {
     padding: 5px 10px;
     border-bottom: 1px solid var(--border-color, #444);
@@ -2843,39 +2828,6 @@ async function buildSidebar(el) {
 
             row.appendChild(nameSpan);
             row.appendChild(countSpanItem);
-
-            // "Load" button — opens latest snapshot as a new workflow tab
-            if (entry.workflowKey !== currentKey) {
-                const loadBtn = document.createElement("button");
-                loadBtn.className = "snap-workflow-load-btn";
-                loadBtn.textContent = "Load";
-                loadBtn.title = "Open latest snapshot as a new workflow tab";
-                loadBtn.addEventListener("click", async (e) => {
-                    e.stopPropagation();
-                    try {
-                        const records = await db_getAllForWorkflow(entry.workflowKey);
-                        if (!records || records.length === 0) {
-                            showToast("No snapshots found for this workflow", "error");
-                            return;
-                        }
-                        // Get the most recent snapshot (last by timestamp)
-                        const latest = records[records.length - 1];
-                        const full = await db_getFullRecord(entry.workflowKey, latest.id);
-                        if (!full || !full.graphData) {
-                            showToast("Failed to load snapshot data", "error");
-                            return;
-                        }
-                        // Load as new tab with the workflow's name (string 4th arg = new temporary workflow with that name)
-                        await app.loadGraphData(full.graphData, true, true, entry.workflowKey);
-                        collapsePicker();
-                        showToast(`Loaded "${entry.workflowKey}" in a new tab`, "success");
-                    } catch (err) {
-                        console.error("[SnapshotManager] Load workflow failed:", err);
-                        showToast("Failed to load workflow", "error");
-                    }
-                });
-                row.appendChild(loadBtn);
-            }
 
             row.addEventListener("click", async () => {
                 if (entry.workflowKey === currentKey) {
