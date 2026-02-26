@@ -2062,30 +2062,25 @@ const CSS = `
 }
 .snap-timeline-fork-group {
     display: flex;
-    align-items: center;
-    gap: 1px;
-    flex-shrink: 0;
-}
-.snap-timeline-fork-center {
-    display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1px;
+    flex-shrink: 0;
+    gap: 0;
 }
 .snap-timeline-branch-btn {
     background: none;
     border: none;
     color: #3b82f6;
-    font-size: 10px;
+    font-size: 8px;
     cursor: pointer;
-    padding: 0 1px;
+    padding: 0;
     line-height: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 18px;
-    border-radius: 3px;
+    width: 18px;
+    height: 10px;
+    border-radius: 2px;
     flex-shrink: 0;
     opacity: 0.7;
     transition: opacity 0.1s, background 0.1s;
@@ -2094,12 +2089,28 @@ const CSS = `
     opacity: 1;
     background: rgba(59, 130, 246, 0.2);
 }
-.snap-timeline-branch-label {
-    font-size: 8px;
-    color: #3b82f6;
-    font-weight: 600;
-    white-space: nowrap;
+.snap-timeline-fork-marker-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.snap-timeline-fork-badge {
+    position: absolute;
+    top: -4px;
+    right: -6px;
+    font-size: 7px;
+    font-weight: 700;
+    color: #fff;
+    background: #3b82f6;
+    border-radius: 6px;
+    min-width: 12px;
+    height: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     line-height: 1;
+    pointer-events: none;
 }
 .snap-diff-overlay {
     position: fixed;
@@ -3493,7 +3504,7 @@ function buildTimeline() {
                 swapSnapshot(rec);
             });
 
-            // Fork point: wrap marker with branch arrows
+            // Fork point: vertical stack — up arrow, marker with badge, down arrow
             if (forkPointSet.has(rec.id)) {
                 const children = tree.childrenOf.get(rec.id);
                 const selectedIndex = Math.min(activeBranchSelections.get(rec.id) ?? 0, children.length - 1);
@@ -3501,44 +3512,44 @@ function buildTimeline() {
                 const group = document.createElement("div");
                 group.className = "snap-timeline-fork-group";
 
-                // Left arrow
-                const leftBtn = document.createElement("button");
-                leftBtn.className = "snap-timeline-branch-btn";
-                leftBtn.textContent = "\u25C0";
-                leftBtn.title = "Previous branch";
-                if (selectedIndex <= 0) leftBtn.style.visibility = "hidden";
-                leftBtn.addEventListener("click", (e) => {
+                // Up arrow (previous branch)
+                const upBtn = document.createElement("button");
+                upBtn.className = "snap-timeline-branch-btn";
+                upBtn.textContent = "\u25B2";
+                upBtn.title = `Branch ${selectedIndex}/${children.length}`;
+                if (selectedIndex <= 0) upBtn.style.visibility = "hidden";
+                upBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
                     activeBranchSelections.set(rec.id, Math.max(0, selectedIndex - 1));
                     refresh();
                     if (sidebarRefresh) sidebarRefresh().catch(() => {});
                 });
 
-                // Right arrow
-                const rightBtn = document.createElement("button");
-                rightBtn.className = "snap-timeline-branch-btn";
-                rightBtn.textContent = "\u25B6";
-                rightBtn.title = "Next branch";
-                if (selectedIndex >= children.length - 1) rightBtn.style.visibility = "hidden";
-                rightBtn.addEventListener("click", (e) => {
+                // Down arrow (next branch)
+                const downBtn = document.createElement("button");
+                downBtn.className = "snap-timeline-branch-btn";
+                downBtn.textContent = "\u25BC";
+                downBtn.title = `Branch ${selectedIndex + 2}/${children.length}`;
+                if (selectedIndex >= children.length - 1) downBtn.style.visibility = "hidden";
+                downBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
                     activeBranchSelections.set(rec.id, Math.min(children.length - 1, selectedIndex + 1));
                     refresh();
                     if (sidebarRefresh) sidebarRefresh().catch(() => {});
                 });
 
-                // Center column: marker + branch label stacked vertically
-                const center = document.createElement("div");
-                center.className = "snap-timeline-fork-center";
-                const branchLabel = document.createElement("span");
-                branchLabel.className = "snap-timeline-branch-label";
-                branchLabel.textContent = `${selectedIndex + 1}/${children.length}`;
-                center.appendChild(marker);
-                center.appendChild(branchLabel);
+                // Marker with fork count badge
+                const markerWrap = document.createElement("div");
+                markerWrap.className = "snap-timeline-fork-marker-wrap";
+                const badge = document.createElement("span");
+                badge.className = "snap-timeline-fork-badge";
+                badge.textContent = `${children.length}`;
+                markerWrap.appendChild(marker);
+                markerWrap.appendChild(badge);
 
-                group.appendChild(leftBtn);
-                group.appendChild(center);
-                group.appendChild(rightBtn);
+                group.appendChild(upBtn);
+                group.appendChild(markerWrap);
+                group.appendChild(downBtn);
                 track.appendChild(group);
             } else {
                 track.appendChild(marker);
