@@ -2836,15 +2836,17 @@ async function buildSidebar(el) {
                     // Try to switch to the workflow in ComfyUI
                     const wfStore = app.extensionManager?.workflow;
                     const openWfs = wfStore?.openWorkflows;
-                    if (openWfs && wfStore.openWorkflow) {
+                    if (openWfs) {
                         const target = openWfs.find(wf =>
                             (wf.key || wf.filename || wf.path) === entry.workflowKey
                         );
                         if (target) {
                             try {
+                                if (!target.isLoaded && target.load) await target.load();
                                 collapsePicker();
-                                await wfStore.openWorkflow(target);
-                                // openWorkflow listener handles viewingWorkflowKey reset + refresh
+                                await app.loadGraphData(target.activeState, true, true, target);
+                                // loadGraphData triggers the openWorkflow store action,
+                                // whose listener handles viewingWorkflowKey reset + refresh
                                 return;
                             } catch { /* fall through to view-only */ }
                         }
