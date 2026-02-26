@@ -1583,8 +1583,9 @@ async function restoreSnapshot(record) {
         }
         try {
             await app.loadGraphData(record.graphData, true, true);
-            lastCapturedHashMap.set(getWorkflowKey(), quickHash(JSON.stringify(record.graphData)));
-            lastGraphDataMap.set(getWorkflowKey(), record.graphData);
+            const wfKey = getWorkflowKey();
+            lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(record.graphData)));
+            lastGraphDataMap.set(wfKey, record.graphData);
             showToast("Snapshot restored", "success");
         } catch (err) {
             console.warn(`[${EXTENSION_NAME}] Restore failed:`, err);
@@ -1625,8 +1626,9 @@ async function swapSnapshot(record) {
         try {
             const workflow = app.extensionManager?.workflow?.activeWorkflow;
             await app.loadGraphData(record.graphData, true, true, workflow);
-            lastCapturedHashMap.set(getWorkflowKey(), quickHash(JSON.stringify(record.graphData)));
-            lastGraphDataMap.set(getWorkflowKey(), record.graphData);
+            const wfKey = getWorkflowKey();
+            lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(record.graphData)));
+            lastGraphDataMap.set(wfKey, record.graphData);
             activeSnapshotId = record.id;
             showToast("Snapshot swapped", "success");
         } catch (err) {
@@ -2102,6 +2104,12 @@ const CSS = `
 }
 .snap-timeline-marker-current:hover {
     box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+}
+.snap-timeline-marker-latest {
+    box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.5);
+}
+.snap-timeline-marker-latest:hover {
+    box-shadow: 0 0 6px rgba(250, 204, 21, 0.6);
 }
 .snap-timeline-snap-btn {
     background: none;
@@ -2802,8 +2810,8 @@ async function buildSidebar(el) {
     async function populatePicker() {
         pickerList.innerHTML = "";
         const keys = await db_getAllWorkflowKeys();
-        const effectiveKey = getEffectiveWorkflowKey();
         const currentKey = getWorkflowKey();
+        const effectiveKey = viewingWorkflowKey ?? currentKey;
 
         if (keys.length === 0) {
             const empty = document.createElement("div");
@@ -3113,13 +3121,14 @@ async function buildSidebar(el) {
         if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
         tooltip.classList.remove("visible");
         const currentKey = getWorkflowKey();
-        const effKey = getEffectiveWorkflowKey();
+        const effKey = viewingWorkflowKey ?? currentKey;
         const isViewingOther = viewingWorkflowKey != null && viewingWorkflowKey !== currentKey;
 
         const allRecords = await db_getAllForWorkflow(effKey);
 
-        const regularCount = allRecords.filter(r => r.source !== "node").length;
-        const nodeCount = allRecords.filter(r => r.source === "node").length;
+        let nodeCount = 0;
+        for (const r of allRecords) if (r.source === "node") nodeCount++;
+        const regularCount = allRecords.length - nodeCount;
         countSpan.textContent = nodeCount > 0
             ? `${regularCount}/${maxSnapshots} + ${nodeCount}/${maxNodeSnapshots} node`
             : `${regularCount} / ${maxSnapshots}`;
@@ -3550,7 +3559,7 @@ function buildTimeline() {
     canvasParent.appendChild(bar);
     timelineEl = bar;
 
-    function buildMarker(rec, { onClickBranch = null } = {}) {
+    function buildMarker(rec, { onClickBranch = null, isLatest = false, activeId = null } = {}) {
         const marker = document.createElement("div");
         marker.className = "snap-timeline-marker";
 
@@ -3563,11 +3572,12 @@ function buildTimeline() {
             marker.style.setProperty("--snap-marker-color", "#6d28d9");
         }
         if (rec.locked) marker.classList.add("snap-timeline-marker-locked");
-        if (rec.id === activeSnapshotId) marker.classList.add("snap-timeline-marker-active");
+        if (rec.id === activeId) marker.classList.add("snap-timeline-marker-active");
         if (rec.id === currentSnapshotId) {
             marker.classList.add("snap-timeline-marker-current");
             marker.style.setProperty("--snap-marker-color", "#10b981");
         }
+        if (isLatest) marker.classList.add("snap-timeline-marker-latest");
 
         let tip = `${rec.label} — ${formatTime(rec.timestamp)}\n${iconInfo.label}`;
         if (rec.notes) tip += `\n${rec.notes}`;
@@ -3592,7 +3602,8 @@ function buildTimeline() {
             expandBtn.textContent = "\u25B4";
         }
 
-        const allRecords = await db_getAllForWorkflow(getWorkflowKey());
+        const wfKey = getWorkflowKey();
+        const allRecords = await db_getAllForWorkflow(wfKey);
 
         track.innerHTML = "";
 
@@ -3603,6 +3614,10 @@ function buildTimeline() {
             track.appendChild(empty);
             return;
         }
+
+        // Compute once for all markers
+        const effectiveActiveId = activeSnapshotId ?? lastCapturedIdMap.get(wfKey) ?? null;
+        const latestId = allRecords.reduce((best, r) => (!best || r.timestamp > best.timestamp) ? r : best, null)?.id ?? null;
 
         let tree = null;
         if (branchingEnabled) {
@@ -3636,6 +3651,8 @@ function buildTimeline() {
                         onClickBranch: isActiveBranch ? null : () => {
                             selectBranchContaining(branchLeafId, tree);
                         },
+                        isLatest: rec.id === latestId,
+                        activeId: effectiveActiveId,
                     });
                     row.appendChild(marker);
                 }
@@ -3663,7 +3680,7 @@ function buildTimeline() {
         }
 
         for (const rec of records) {
-            const marker = buildMarker(rec);
+            const marker = buildMarker(rec, { isLatest: rec.id === latestId, activeId: effectiveActiveId });
 
             // Fork point: vertical stack — up arrow, marker, down arrow
             if (branchingEnabled && forkPointSet.has(rec.id)) {
