@@ -2089,7 +2089,7 @@ const CSS = `
     margin: 0;
     line-height: 1;
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     justify-content: center;
     width: 18px;
     height: 8px;
@@ -2098,8 +2098,8 @@ const CSS = `
     opacity: 0.7;
     transition: opacity 0.1s, background 0.1s;
 }
-.snap-timeline-branch-btn:last-child {
-    align-items: flex-start;
+.snap-timeline-branch-btn:first-child {
+    margin-bottom: -3px;
 }
 .snap-timeline-branch-btn:hover {
     opacity: 1;
