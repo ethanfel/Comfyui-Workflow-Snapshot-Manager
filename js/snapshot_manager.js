@@ -42,6 +42,9 @@ let diffBaseSnapshot = null;   // snapshot record selected as diff base (shift+c
 const svgCache = new Map();    // "snapshotId:WxH" -> SVGElement template
 let svgClipCounter = 0;        // unique prefix for SVG clipPath IDs
 let sidebarTooltipEl = null;   // tooltip element for sidebar hover previews
+const lastCapturedIdMap = new Map(); // workflowKey -> id of most recent capture (for parentId chaining)
+const activeBranchSelections = new Map(); // forkPointId -> selected child index
+const sessionWorkflows = new Map(); // workflowKey -> { firstSeen, lastSeen }
 
 // ─── Server API Layer ───────────────────────────────────────────────
 
@@ -164,12 +167,12 @@ async function db_getFullRecord(workflowKey, id) {
     }
 }
 
-async function pruneSnapshots(workflowKey) {
+async function pruneSnapshots(workflowKey, protectedIds = []) {
     try {
         const resp = await api.fetchApi("/snapshot-manager/prune", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workflowKey, maxSnapshots, source: "regular" }),
+            body: JSON.stringify({ workflowKey, maxSnapshots, source: "regular", protectedIds }),
         });
         if (!resp.ok) {
             const err = await resp.json();
@@ -180,12 +183,12 @@ async function pruneSnapshots(workflowKey) {
     }
 }
 
-async function pruneNodeSnapshots(workflowKey) {
+async function pruneNodeSnapshots(workflowKey, protectedIds = []) {
     try {
         const resp = await api.fetchApi("/snapshot-manager/prune", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workflowKey, maxSnapshots: maxNodeSnapshots, source: "node" }),
+            body: JSON.stringify({ workflowKey, maxSnapshots: maxNodeSnapshots, source: "node", protectedIds }),
         });
         if (!resp.ok) {
             const err = await resp.json();
@@ -193,6 +196,66 @@ async function pruneNodeSnapshots(workflowKey) {
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Node prune failed:`, err);
+    }
+}
+
+// ─── Profile API Layer ───────────────────────────────────────────────
+
+async function profile_save(profile) {
+    try {
+        const resp = await api.fetchApi("/snapshot-manager/profile/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ profile }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
+    } catch (err) {
+        console.warn(`[${EXTENSION_NAME}] Profile save failed:`, err);
+        showToast("Failed to save profile", "error");
+        throw err;
+    }
+}
+
+async function profile_list() {
+    try {
+        const resp = await api.fetchApi("/snapshot-manager/profile/list");
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
+        return await resp.json();
+    } catch (err) {
+        console.warn(`[${EXTENSION_NAME}] Profile list failed:`, err);
+        return [];
+    }
+}
+
+async function profile_delete(profileId) {
+    try {
+        const resp = await api.fetchApi("/snapshot-manager/profile/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: profileId }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
+    } catch (err) {
+        console.warn(`[${EXTENSION_NAME}] Profile delete failed:`, err);
+        showToast("Failed to delete profile", "error");
+    }
+}
+
+function trackSessionWorkflow(workflowKey) {
+    const now = Date.now();
+    if (sessionWorkflows.has(workflowKey)) {
+        sessionWorkflows.get(workflowKey).lastSeen = now;
+    } else {
+        sessionWorkflows.set(workflowKey, { firstSeen: now, lastSeen: now });
     }
 }
 
@@ -822,6 +885,92 @@ function getCachedSVG(snapshotId, graphData, options = {}) {
     return null;
 }
 
+// ─── Snapshot Tree (Branching) ───────────────────────────────────────
+
+function buildSnapshotTree(records) {
+    const childrenOf = new Map(); // parentId -> [children records]
+    const parentOf = new Map();   // id -> parentId
+    const roots = [];
+    const byId = new Map();
+
+    for (const r of records) byId.set(r.id, r);
+
+    // Separate legacy (no parentId) from branched records
+    const legacy = [];
+    const branched = [];
+    for (const r of records) {
+        if (r.parentId === undefined || r.parentId === null) {
+            legacy.push(r);
+        } else {
+            branched.push(r);
+        }
+    }
+
+    // Chain legacy snapshots by timestamp order (backwards compat)
+    legacy.sort((a, b) => a.timestamp - b.timestamp);
+    for (let i = 0; i < legacy.length; i++) {
+        const r = legacy[i];
+        const syntheticParent = i > 0 ? legacy[i - 1].id : null;
+        if (syntheticParent) {
+            parentOf.set(r.id, syntheticParent);
+            if (!childrenOf.has(syntheticParent)) childrenOf.set(syntheticParent, []);
+            childrenOf.get(syntheticParent).push(r);
+        } else {
+            roots.push(r);
+        }
+    }
+
+    // Process branched records
+    for (const r of branched) {
+        parentOf.set(r.id, r.parentId);
+        if (byId.has(r.parentId)) {
+            if (!childrenOf.has(r.parentId)) childrenOf.set(r.parentId, []);
+            childrenOf.get(r.parentId).push(r);
+        } else {
+            // Parent not found (deleted?), treat as root
+            roots.push(r);
+        }
+    }
+
+    // Sort children by timestamp at each fork point
+    for (const [, children] of childrenOf) {
+        children.sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    return { childrenOf, parentOf, roots, byId };
+}
+
+function getDisplayPath(tree, branchSelections) {
+    const { childrenOf, roots } = tree;
+    if (roots.length === 0) return [];
+
+    // Pick root (should normally be 1, but handle multiple)
+    const rootIndex = branchSelections.get("__root__") ?? 0;
+    let current = roots[Math.min(rootIndex, roots.length - 1)];
+    if (!current) return [];
+
+    const path = [current];
+    while (true) {
+        const children = childrenOf.get(current.id);
+        if (!children || children.length === 0) break;
+        const selectedIndex = branchSelections.get(current.id) ?? 0;
+        current = children[Math.min(selectedIndex, children.length - 1)];
+        path.push(current);
+    }
+    return path;
+}
+
+function getAncestorIds(snapshotId, parentOf) {
+    const ancestors = new Set();
+    let current = snapshotId;
+    while (parentOf.has(current)) {
+        current = parentOf.get(current);
+        if (ancestors.has(current)) break; // safety: cycle detection
+        ancestors.add(current);
+    }
+    return ancestors;
+}
+
 // ─── Restore Lock ───────────────────────────────────────────────────
 
 async function withRestoreLock(fn) {
@@ -1225,6 +1374,14 @@ async function captureSnapshot(label = "Auto") {
     const prevGraph = lastGraphDataMap.get(workflowKey);
     const changeType = detectChangeType(prevGraph, graphData);
 
+    // Determine parentId for branching
+    let parentId = null;
+    if (activeSnapshotId) {
+        parentId = activeSnapshotId; // fork from swapped snapshot
+    } else if (lastCapturedIdMap.has(workflowKey)) {
+        parentId = lastCapturedIdMap.get(workflowKey); // continuation
+    }
+
     const record = {
         id: generateId(),
         workflowKey,
@@ -1234,17 +1391,28 @@ async function captureSnapshot(label = "Auto") {
         graphData,
         locked: false,
         changeType,
+        parentId,
     };
 
     try {
         await db_put(record);
-        await pruneSnapshots(workflowKey);
+        // Compute protected IDs: ancestors of this capture + fork points
+        const allRecs = await db_getAllForWorkflow(workflowKey);
+        const tempTree = buildSnapshotTree(allRecs);
+        const ancestors = getAncestorIds(record.id, tempTree.parentOf);
+        // Protect fork points (snapshots with >1 child)
+        for (const [pid, children] of tempTree.childrenOf) {
+            if (children.length > 1) ancestors.add(pid);
+        }
+        ancestors.add(record.id); // protect the just-captured snapshot
+        await pruneSnapshots(workflowKey, [...ancestors]);
     } catch {
         return false;
     }
 
     lastCapturedHashMap.set(workflowKey, hash);
     lastGraphDataMap.set(workflowKey, graphData);
+    lastCapturedIdMap.set(workflowKey, record.id);
     pickerDirty = true;
     currentSnapshotId = null;  // new capture supersedes "current" bookmark
     activeSnapshotId = null;   // graph has changed, no snapshot is "active"
@@ -1271,6 +1439,14 @@ async function captureNodeSnapshot(label = "Node Trigger") {
     const prevGraph = lastGraphDataMap.get(workflowKey);
     const changeType = detectChangeType(prevGraph, graphData);
 
+    // Determine parentId for branching
+    let parentId = null;
+    if (activeSnapshotId) {
+        parentId = activeSnapshotId;
+    } else if (lastCapturedIdMap.has(workflowKey)) {
+        parentId = lastCapturedIdMap.get(workflowKey);
+    }
+
     const record = {
         id: generateId(),
         workflowKey,
@@ -1281,16 +1457,26 @@ async function captureNodeSnapshot(label = "Node Trigger") {
         locked: false,
         source: "node",
         changeType,
+        parentId,
     };
 
     try {
         await db_put(record);
-        await pruneNodeSnapshots(workflowKey);
+        // Compute protected IDs: ancestors + fork points
+        const allRecs = await db_getAllForWorkflow(workflowKey);
+        const tempTree = buildSnapshotTree(allRecs);
+        const protectedNodeIds = getAncestorIds(record.id, tempTree.parentOf);
+        for (const [pid, children] of tempTree.childrenOf) {
+            if (children.length > 1) protectedNodeIds.add(pid);
+        }
+        protectedNodeIds.add(record.id);
+        await pruneNodeSnapshots(workflowKey, [...protectedNodeIds]);
     } catch {
         return false;
     }
 
     lastGraphDataMap.set(workflowKey, graphData);
+    lastCapturedIdMap.set(workflowKey, record.id);
     pickerDirty = true;
     currentSnapshotId = null;
     activeSnapshotId = null;
@@ -1766,7 +1952,7 @@ const CSS = `
     bottom: 4px;
     left: 10%;
     right: 10%;
-    height: 32px;
+    height: 38px;
     background: rgba(15, 23, 42, 0.85);
     border: 1px solid var(--border-color, #334155);
     border-radius: 8px;
@@ -1850,6 +2036,47 @@ const CSS = `
     font-size: 11px;
     font-family: system-ui, sans-serif;
     line-height: 32px;
+}
+.snap-timeline-fork-group {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    flex-shrink: 0;
+}
+.snap-timeline-fork-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+}
+.snap-timeline-branch-btn {
+    background: none;
+    border: none;
+    color: #3b82f6;
+    font-size: 10px;
+    cursor: pointer;
+    padding: 0 1px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 18px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    opacity: 0.7;
+    transition: opacity 0.1s, background 0.1s;
+}
+.snap-timeline-branch-btn:hover {
+    opacity: 1;
+    background: rgba(59, 130, 246, 0.2);
+}
+.snap-timeline-branch-label {
+    font-size: 8px;
+    color: #3b82f6;
+    font-weight: 600;
+    white-space: nowrap;
+    line-height: 1;
 }
 .snap-diff-overlay {
     position: fixed;
@@ -2096,6 +2323,149 @@ const CSS = `
 .snap-btn-preview:hover:not(:disabled) {
     background: #475569;
 }
+.snap-branch-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 3px 10px;
+    background: rgba(59, 130, 246, 0.08);
+    border-bottom: 1px solid var(--border-color, #333);
+    user-select: none;
+}
+.snap-branch-nav button {
+    background: none;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    color: #3b82f6;
+    border-radius: 3px;
+    width: 22px;
+    height: 20px;
+    font-size: 11px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    line-height: 1;
+}
+.snap-branch-nav button:hover {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: #3b82f6;
+}
+.snap-branch-nav-label {
+    font-size: 11px;
+    color: #3b82f6;
+    font-weight: 600;
+    min-width: 30px;
+    text-align: center;
+}
+.snap-profiles {
+    border-bottom: 1px solid var(--border-color, #444);
+    flex-shrink: 0;
+}
+.snap-profiles-header {
+    display: flex;
+    align-items: center;
+    padding: 6px 10px;
+    cursor: pointer;
+    gap: 6px;
+    user-select: none;
+}
+.snap-profiles-header:hover {
+    background: var(--comfy-menu-bg, #2a2a2a);
+}
+.snap-profiles-arrow {
+    font-size: 10px;
+    color: var(--descrip-text, #888);
+    flex-shrink: 0;
+    transition: transform 0.15s;
+}
+.snap-profiles-arrow.expanded {
+    transform: rotate(90deg);
+}
+.snap-profiles-title {
+    flex: 1;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--descrip-text, #888);
+}
+.snap-profiles-save-btn {
+    padding: 2px 8px;
+    border: 1px solid #3b82f6;
+    border-radius: 3px;
+    background: transparent;
+    color: #3b82f6;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.snap-profiles-save-btn:hover {
+    background: rgba(59, 130, 246, 0.15);
+}
+.snap-profiles-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.15s ease-out;
+}
+.snap-profiles-body.expanded {
+    max-height: 200px;
+    overflow-y: auto;
+}
+.snap-profile-item {
+    display: flex;
+    align-items: center;
+    padding: 4px 10px 4px 18px;
+    gap: 6px;
+    font-size: 12px;
+}
+.snap-profile-item:hover {
+    background: var(--comfy-menu-bg, #2a2a2a);
+}
+.snap-profile-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--input-text, #ccc);
+}
+.snap-profile-count {
+    font-size: 10px;
+    color: var(--descrip-text, #888);
+    flex-shrink: 0;
+}
+.snap-profile-load-btn {
+    padding: 2px 8px;
+    border: none;
+    border-radius: 3px;
+    background: #22c55e;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.snap-profile-load-btn:hover {
+    background: #16a34a;
+}
+.snap-profile-delete-btn {
+    background: none;
+    border: none;
+    color: var(--descrip-text, #888);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    flex-shrink: 0;
+}
+.snap-profile-delete-btn:hover {
+    color: #dc2626;
+}
+.snap-profiles-empty {
+    padding: 6px 18px;
+    font-size: 11px;
+    color: var(--descrip-text, #888);
+}
 `;
 
 const CHANGE_TYPE_ICONS = {
@@ -2157,6 +2527,44 @@ function formatTime(ts) {
 function formatDate(ts) {
     const d = new Date(ts);
     return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+function buildBranchNavigator(forkPointId, children, selectedIndex, refreshFn) {
+    const nav = document.createElement("div");
+    nav.className = "snap-branch-nav";
+
+    const leftBtn = document.createElement("button");
+    leftBtn.textContent = "\u25C0";
+    leftBtn.title = "Previous branch";
+    leftBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const newIndex = Math.max(0, selectedIndex - 1);
+        activeBranchSelections.set(forkPointId, newIndex);
+        refreshFn();
+        if (timelineRefresh) timelineRefresh().catch(() => {});
+    });
+    if (selectedIndex <= 0) leftBtn.style.visibility = "hidden";
+
+    const label = document.createElement("span");
+    label.className = "snap-branch-nav-label";
+    label.textContent = `${selectedIndex + 1}/${children.length}`;
+
+    const rightBtn = document.createElement("button");
+    rightBtn.textContent = "\u25B6";
+    rightBtn.title = "Next branch";
+    rightBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const newIndex = Math.min(children.length - 1, selectedIndex + 1);
+        activeBranchSelections.set(forkPointId, newIndex);
+        refreshFn();
+        if (timelineRefresh) timelineRefresh().catch(() => {});
+    });
+    if (selectedIndex >= children.length - 1) rightBtn.style.visibility = "hidden";
+
+    nav.appendChild(leftBtn);
+    nav.appendChild(label);
+    nav.appendChild(rightBtn);
+    return nav;
 }
 
 async function buildSidebar(el) {
@@ -2287,6 +2695,7 @@ async function buildSidebar(el) {
                 } else {
                     viewingWorkflowKey = entry.workflowKey;
                 }
+                activeBranchSelections.clear();
                 collapsePicker();
                 await refresh(true);
             });
@@ -2363,10 +2772,178 @@ async function buildSidebar(el) {
     });
     footer.appendChild(clearBtn);
 
+    // ─── Profiles Section ──────────────────────────────────────────
+    const profilesSection = document.createElement("div");
+    profilesSection.className = "snap-profiles";
+
+    const profilesHeader = document.createElement("div");
+    profilesHeader.className = "snap-profiles-header";
+
+    const profilesArrow = document.createElement("span");
+    profilesArrow.className = "snap-profiles-arrow";
+    profilesArrow.textContent = "\u25B6";
+
+    const profilesTitle = document.createElement("span");
+    profilesTitle.className = "snap-profiles-title";
+    profilesTitle.textContent = "Profiles";
+
+    const profilesSaveBtn = document.createElement("button");
+    profilesSaveBtn.className = "snap-profiles-save-btn";
+    profilesSaveBtn.textContent = "Save";
+    profilesSaveBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const name = await showPromptDialog("Profile name:", "My Profile");
+        if (name == null) return;
+        const trimmed = name.trim() || "My Profile";
+
+        // Gather session workflows
+        const workflows = [];
+        for (const [wk, info] of sessionWorkflows) {
+            workflows.push({ workflowKey: wk, displayName: wk });
+        }
+        if (workflows.length === 0) {
+            // At least include current workflow
+            const currentKey = getWorkflowKey();
+            workflows.push({ workflowKey: currentKey, displayName: currentKey });
+        }
+
+        const profile = {
+            id: generateId(),
+            name: trimmed,
+            timestamp: Date.now(),
+            workflows,
+            activeWorkflowKey: getWorkflowKey(),
+        };
+
+        try {
+            await profile_save(profile);
+            showToast(`Profile "${trimmed}" saved (${workflows.length} workflow${workflows.length === 1 ? "" : "s"})`, "success");
+            await refreshProfiles();
+        } catch {
+            // profile_save already toasts
+        }
+    });
+
+    profilesHeader.appendChild(profilesArrow);
+    profilesHeader.appendChild(profilesTitle);
+    profilesHeader.appendChild(profilesSaveBtn);
+
+    const profilesBody = document.createElement("div");
+    profilesBody.className = "snap-profiles-body";
+    let profilesExpanded = false;
+
+    profilesHeader.addEventListener("click", async () => {
+        profilesExpanded = !profilesExpanded;
+        profilesArrow.classList.toggle("expanded", profilesExpanded);
+        profilesBody.classList.toggle("expanded", profilesExpanded);
+        if (profilesExpanded) await refreshProfiles();
+    });
+
+    async function refreshProfiles() {
+        profilesBody.innerHTML = "";
+        const profiles = await profile_list();
+        if (profiles.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "snap-profiles-empty";
+            empty.textContent = "No saved profiles";
+            profilesBody.appendChild(empty);
+            return;
+        }
+        for (const p of profiles) {
+            const row = document.createElement("div");
+            row.className = "snap-profile-item";
+
+            const nameSpan = document.createElement("span");
+            nameSpan.className = "snap-profile-name";
+            nameSpan.textContent = p.name;
+            nameSpan.title = p.name;
+
+            const countSpanP = document.createElement("span");
+            countSpanP.className = "snap-profile-count";
+            countSpanP.textContent = `${(p.workflows || []).length} wf`;
+
+            const loadBtn = document.createElement("button");
+            loadBtn.className = "snap-profile-load-btn";
+            loadBtn.textContent = "Load";
+            loadBtn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                loadBtn.disabled = true;
+                loadBtn.textContent = "Loading...";
+                try {
+                    const workflows = p.workflows || [];
+                    let loaded = 0;
+                    let skipped = 0;
+                    // Load non-active workflows first (each overwrites previous —
+                    // ComfyUI can only display one workflow at a time, but loading
+                    // them populates the workflow history/tabs in some frontends)
+                    for (const wf of workflows) {
+                        // Skip active workflow — loaded last so it ends up visible
+                        if (wf.workflowKey === p.activeWorkflowKey) continue;
+                        const records = await db_getAllForWorkflow(wf.workflowKey);
+                        if (records.length === 0) { skipped++; continue; }
+                        records.sort((a, b) => b.timestamp - a.timestamp);
+                        const full = await db_getFullRecord(records[0].workflowKey, records[0].id);
+                        if (!full || !full.graphData) { skipped++; continue; }
+                        try {
+                            await app.loadGraphData(full.graphData, true, true);
+                            loaded++;
+                        } catch { skipped++; }
+                    }
+                    // Load the active workflow last so it's the one visible
+                    if (p.activeWorkflowKey) {
+                        const activeRecs = await db_getAllForWorkflow(p.activeWorkflowKey);
+                        if (activeRecs.length > 0) {
+                            activeRecs.sort((a, b) => b.timestamp - a.timestamp);
+                            const activeFull = await db_getFullRecord(activeRecs[0].workflowKey, activeRecs[0].id);
+                            if (activeFull?.graphData) {
+                                try {
+                                    await app.loadGraphData(activeFull.graphData, true, true);
+                                    loaded++;
+                                } catch { skipped++; }
+                            } else { skipped++; }
+                        } else { skipped++; }
+                    }
+                    let msg = `Profile "${p.name}" loaded (${loaded} workflow${loaded === 1 ? "" : "s"})`;
+                    if (skipped > 0) msg += `, ${skipped} skipped`;
+                    showToast(msg, "success");
+                } catch (err) {
+                    console.warn(`[${EXTENSION_NAME}] Profile load failed:`, err);
+                    showToast("Failed to load profile", "error");
+                } finally {
+                    loadBtn.disabled = false;
+                    loadBtn.textContent = "Load";
+                }
+            });
+
+            const deleteBtn2 = document.createElement("button");
+            deleteBtn2.className = "snap-profile-delete-btn";
+            deleteBtn2.textContent = "\u2715";
+            deleteBtn2.title = "Delete profile";
+            deleteBtn2.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                const confirmed = await showConfirmDialog(`Delete profile "${p.name}"?`);
+                if (!confirmed) return;
+                await profile_delete(p.id);
+                showToast(`Profile "${p.name}" deleted`, "info");
+                await refreshProfiles();
+            });
+
+            row.appendChild(nameSpan);
+            row.appendChild(countSpanP);
+            row.appendChild(loadBtn);
+            row.appendChild(deleteBtn2);
+            profilesBody.appendChild(row);
+        }
+    }
+
+    profilesSection.appendChild(profilesHeader);
+    profilesSection.appendChild(profilesBody);
+
     container.appendChild(header);
     container.appendChild(selectorRow);
     container.appendChild(pickerList);
     container.appendChild(viewingBanner);
+    container.appendChild(profilesSection);
     container.appendChild(searchRow);
     container.appendChild(list);
     container.appendChild(footer);
@@ -2398,12 +2975,10 @@ async function buildSidebar(el) {
         const effKey = getEffectiveWorkflowKey();
         const isViewingOther = viewingWorkflowKey != null && viewingWorkflowKey !== currentKey;
 
-        const records = await db_getAllForWorkflow(effKey);
-        // newest first
-        records.sort((a, b) => b.timestamp - a.timestamp);
+        const allRecords = await db_getAllForWorkflow(effKey);
 
-        const regularCount = records.filter(r => r.source !== "node").length;
-        const nodeCount = records.filter(r => r.source === "node").length;
+        const regularCount = allRecords.filter(r => r.source !== "node").length;
+        const nodeCount = allRecords.filter(r => r.source === "node").length;
         countSpan.textContent = nodeCount > 0
             ? `${regularCount}/${maxSnapshots} + ${nodeCount}/${maxNodeSnapshots} node`
             : `${regularCount} / ${maxSnapshots}`;
@@ -2433,7 +3008,7 @@ async function buildSidebar(el) {
         list.innerHTML = "";
         itemEntries = [];
 
-        if (records.length === 0) {
+        if (allRecords.length === 0) {
             const empty = document.createElement("div");
             empty.className = "snap-empty";
             empty.textContent = "No snapshots yet. Edit the workflow or click 'Take Snapshot'.";
@@ -2441,7 +3016,26 @@ async function buildSidebar(el) {
             return;
         }
 
+        // Build tree and get display path for current branch
+        const tree = buildSnapshotTree(allRecords);
+        const displayPath = getDisplayPath(tree, activeBranchSelections);
+        // newest first for display
+        const records = [...displayPath].reverse();
+
+        // Build set of fork point IDs and record positions for branch nav insertion
+        const forkPointIds = new Set();
+        for (const [parentId, children] of tree.childrenOf) {
+            if (children.length > 1) forkPointIds.add(parentId);
+        }
+
         for (const rec of records) {
+            // Insert branch navigator above fork-point snapshots
+            if (forkPointIds.has(rec.id)) {
+                const children = tree.childrenOf.get(rec.id);
+                const selectedIndex = Math.min(activeBranchSelections.get(rec.id) ?? 0, children.length - 1);
+                const nav = buildBranchNavigator(rec.id, children, selectedIndex, refresh);
+                list.appendChild(nav);
+            }
             const item = document.createElement("div");
             item.className = rec.source === "node" ? "snap-item snap-item-node" : "snap-item";
             if (diffBaseSnapshot && diffBaseSnapshot.id === rec.id) {
@@ -2612,6 +3206,20 @@ async function buildSidebar(el) {
                 if (rec.locked) {
                     const confirmed = await showConfirmDialog("This snapshot is locked. Delete anyway?");
                     if (!confirmed) return;
+                }
+                // Fork-point deletion: rebuild tree from fresh data, then re-parent children
+                const freshRecords = await db_getAllForWorkflow(rec.workflowKey);
+                const freshTree = buildSnapshotTree(freshRecords);
+                const children = freshTree.childrenOf.get(rec.id);
+                if (children && children.length > 0) {
+                    const confirmed = await showConfirmDialog(
+                        `This snapshot is a branch point with ${children.length} child snapshot(s). Deleting it will re-parent them. Continue?`
+                    );
+                    if (!confirmed) return;
+                    const newParent = freshTree.parentOf.get(rec.id) ?? null;
+                    for (const child of children) {
+                        await db_updateMeta(rec.workflowKey, child.id, { parentId: newParent });
+                    }
                 }
                 await db_delete(rec.workflowKey, rec.id);
                 pickerDirty = true;
@@ -2784,17 +3392,26 @@ function buildTimeline() {
     async function refresh() {
         if (!showTimeline) return;
 
-        const records = await db_getAllForWorkflow(getWorkflowKey());
-        records.sort((a, b) => a.timestamp - b.timestamp);
+        const allRecords = await db_getAllForWorkflow(getWorkflowKey());
 
         track.innerHTML = "";
 
-        if (records.length === 0) {
+        if (allRecords.length === 0) {
             const empty = document.createElement("span");
             empty.className = "snap-timeline-empty";
             empty.textContent = "No snapshots";
             track.appendChild(empty);
             return;
+        }
+
+        // Show only current branch's markers
+        const tree = buildSnapshotTree(allRecords);
+        const records = getDisplayPath(tree, activeBranchSelections);
+
+        // Identify fork points on this path
+        const forkPointSet = new Set();
+        for (const [parentId, children] of tree.childrenOf) {
+            if (children.length > 1) forkPointSet.add(parentId);
         }
 
         for (const rec of records) {
@@ -2838,7 +3455,56 @@ function buildTimeline() {
                 swapSnapshot(rec);
             });
 
-            track.appendChild(marker);
+            // Fork point: wrap marker with branch arrows
+            if (forkPointSet.has(rec.id)) {
+                const children = tree.childrenOf.get(rec.id);
+                const selectedIndex = Math.min(activeBranchSelections.get(rec.id) ?? 0, children.length - 1);
+
+                const group = document.createElement("div");
+                group.className = "snap-timeline-fork-group";
+
+                // Left arrow
+                const leftBtn = document.createElement("button");
+                leftBtn.className = "snap-timeline-branch-btn";
+                leftBtn.textContent = "\u25C0";
+                leftBtn.title = "Previous branch";
+                if (selectedIndex <= 0) leftBtn.style.visibility = "hidden";
+                leftBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    activeBranchSelections.set(rec.id, Math.max(0, selectedIndex - 1));
+                    refresh();
+                    if (sidebarRefresh) sidebarRefresh().catch(() => {});
+                });
+
+                // Right arrow
+                const rightBtn = document.createElement("button");
+                rightBtn.className = "snap-timeline-branch-btn";
+                rightBtn.textContent = "\u25B6";
+                rightBtn.title = "Next branch";
+                if (selectedIndex >= children.length - 1) rightBtn.style.visibility = "hidden";
+                rightBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    activeBranchSelections.set(rec.id, Math.min(children.length - 1, selectedIndex + 1));
+                    refresh();
+                    if (sidebarRefresh) sidebarRefresh().catch(() => {});
+                });
+
+                // Center column: marker + branch label stacked vertically
+                const center = document.createElement("div");
+                center.className = "snap-timeline-fork-center";
+                const branchLabel = document.createElement("span");
+                branchLabel.className = "snap-timeline-branch-label";
+                branchLabel.textContent = `${selectedIndex + 1}/${children.length}`;
+                center.appendChild(marker);
+                center.appendChild(branchLabel);
+
+                group.appendChild(leftBtn);
+                group.appendChild(center);
+                group.appendChild(rightBtn);
+                track.appendChild(group);
+            } else {
+                track.appendChild(marker);
+            }
         }
     }
 
@@ -2964,6 +3630,7 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
             if (workflowStore?.$onAction) {
                 workflowStore.$onAction(({ name, after }) => {
                     if (name === "openWorkflow") {
+                        const prevKey = getWorkflowKey(); // capture BEFORE switch
                         after(() => {
                             // Cancel any pending capture from the previous workflow
                             if (captureTimer) {
@@ -2974,6 +3641,11 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                             activeSnapshotId = null;
                             currentSnapshotId = null;
                             diffBaseSnapshot = null;
+                            // Clear branching state for the old workflow
+                            lastCapturedIdMap.delete(prevKey);
+                            activeBranchSelections.clear();
+                            // Track session workflow (new key, after switch)
+                            trackSessionWorkflow(getWorkflowKey());
                             if (sidebarRefresh) {
                                 sidebarRefresh(true).catch(() => {});
                             }
@@ -2997,6 +3669,9 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
 
             // Build the timeline bar on the canvas
             buildTimeline();
+
+            // Track initial workflow for profiles
+            trackSessionWorkflow(getWorkflowKey());
 
             // Capture initial state after a short delay (decoupled from debounceMs)
             setTimeout(() => {

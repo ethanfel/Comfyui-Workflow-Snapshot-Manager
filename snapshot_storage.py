@@ -202,21 +202,25 @@ def get_all_workflow_keys():
     return results
 
 
-def prune(workflow_key, max_snapshots, source=None):
+def prune(workflow_key, max_snapshots, source=None, protected_ids=None):
     """Delete oldest unlocked snapshots beyond limit. Returns count deleted.
 
     source filtering:
       - "node": only prune records where source == "node"
       - "regular": only prune records where source is absent or not "node"
       - None: prune all unlocked (existing behavior)
+
+    protected_ids: set/list of snapshot IDs that must not be pruned
+      (e.g. ancestors of active branch tip, fork-point snapshots).
     """
+    _protected = set(protected_ids) if protected_ids else set()
     entries = _ensure_cached(workflow_key)
     if source == "node":
-        candidates = [r for r in entries if not r.get("locked") and r.get("source") == "node"]
+        candidates = [r for r in entries if not r.get("locked") and r.get("source") == "node" and r.get("id") not in _protected]
     elif source == "regular":
-        candidates = [r for r in entries if not r.get("locked") and r.get("source") != "node"]
+        candidates = [r for r in entries if not r.get("locked") and r.get("source") != "node" and r.get("id") not in _protected]
     else:
-        candidates = [r for r in entries if not r.get("locked")]
+        candidates = [r for r in entries if not r.get("locked") and r.get("id") not in _protected]
     if len(candidates) <= max_snapshots:
         return 0
     to_delete = candidates[: len(candidates) - max_snapshots]
@@ -243,3 +247,96 @@ def prune(workflow_key, max_snapshots, source=None):
         os.rmdir(d)
 
     return deleted
+
+
+# ─── Profile Storage ─────────────────────────────────────────────────
+# Profiles are stored as individual JSON files under data/profiles/<id>.json
+
+_PROFILES_DIR = os.path.join(os.path.dirname(__file__), "data", "profiles")
+_profile_cache = None  # list of profile dicts, or None if not loaded
+
+
+def _ensure_profiles_dir():
+    os.makedirs(_PROFILES_DIR, exist_ok=True)
+
+
+def _load_profile_cache():
+    global _profile_cache
+    if _profile_cache is not None:
+        return _profile_cache
+    _ensure_profiles_dir()
+    profiles = []
+    for fname in os.listdir(_PROFILES_DIR):
+        if not fname.endswith(".json"):
+            continue
+        path = os.path.join(_PROFILES_DIR, fname)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                profiles.append(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            continue
+    profiles.sort(key=lambda p: p.get("timestamp", 0))
+    _profile_cache = profiles
+    return _profile_cache
+
+
+def _invalidate_profile_cache():
+    global _profile_cache
+    _profile_cache = None
+
+
+def profile_put(profile):
+    """Create or update a profile. profile must have 'id'."""
+    pid = profile["id"]
+    _validate_id(pid)
+    _ensure_profiles_dir()
+    path = os.path.join(_PROFILES_DIR, f"{pid}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(profile, f, separators=(",", ":"))
+    _invalidate_profile_cache()
+
+
+def profile_get_all():
+    """Return all profiles sorted by timestamp."""
+    return [dict(p) for p in _load_profile_cache()]
+
+
+def profile_get(profile_id):
+    """Return a single profile by ID, or None."""
+    _validate_id(profile_id)
+    path = os.path.join(_PROFILES_DIR, f"{profile_id}.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def profile_delete(profile_id):
+    """Delete a profile by ID."""
+    _validate_id(profile_id)
+    path = os.path.join(_PROFILES_DIR, f"{profile_id}.json")
+    if os.path.isfile(path):
+        os.remove(path)
+    _invalidate_profile_cache()
+
+
+def profile_update(profile_id, fields):
+    """Merge fields into an existing profile. Returns True on success."""
+    _validate_id(profile_id)
+    path = os.path.join(_PROFILES_DIR, f"{profile_id}.json")
+    if not os.path.isfile(path):
+        return False
+    with open(path, "r", encoding="utf-8") as f:
+        profile = json.load(f)
+    for k, v in fields.items():
+        if v is None:
+            profile.pop(k, None)
+        else:
+            profile[k] = v
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(profile, f, separators=(",", ":"))
+    _invalidate_profile_cache()
+    return True

@@ -122,9 +122,10 @@ async def prune_snapshots(request):
         workflow_key = data.get("workflowKey")
         max_snapshots = data.get("maxSnapshots")
         source = data.get("source")
+        protected_ids = data.get("protectedIds")
         if not workflow_key or max_snapshots is None:
             return web.json_response({"error": "Missing workflowKey or maxSnapshots"}, status=400)
-        deleted = storage.prune(workflow_key, int(max_snapshots), source=source)
+        deleted = storage.prune(workflow_key, int(max_snapshots), source=source, protected_ids=protected_ids)
         return web.json_response({"deleted": deleted})
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
@@ -143,6 +144,64 @@ async def migrate_snapshots(request):
                 storage.put(record)
                 imported += 1
         return web.json_response({"imported": imported})
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+# ─── Profile Endpoints ───────────────────────────────────────────────
+
+@routes.post("/snapshot-manager/profile/save")
+async def save_profile(request):
+    try:
+        data = await request.json()
+        profile = data.get("profile")
+        if not profile or "id" not in profile:
+            return web.json_response({"error": "Missing profile with id"}, status=400)
+        storage.profile_put(profile)
+        return web.json_response({"ok": True})
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+@routes.get("/snapshot-manager/profile/list")
+async def list_profiles(request):
+    try:
+        profiles = storage.profile_get_all()
+        return web.json_response(profiles)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+@routes.post("/snapshot-manager/profile/get")
+async def get_profile(request):
+    try:
+        data = await request.json()
+        profile_id = data.get("id")
+        if not profile_id:
+            return web.json_response({"error": "Missing id"}, status=400)
+        profile = storage.profile_get(profile_id)
+        if profile is None:
+            return web.json_response({"error": "Not found"}, status=404)
+        return web.json_response(profile)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+@routes.post("/snapshot-manager/profile/delete")
+async def delete_profile(request):
+    try:
+        data = await request.json()
+        profile_id = data.get("id")
+        if not profile_id:
+            return web.json_response({"error": "Missing id"}, status=400)
+        storage.profile_delete(profile_id)
+        return web.json_response({"ok": True})
     except ValueError as e:
         return web.json_response({"error": str(e)}, status=400)
     except Exception as e:
