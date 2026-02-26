@@ -2077,7 +2077,9 @@ const CSS = `
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: space-between;
     flex-shrink: 0;
+    height: 100%;
 }
 .snap-timeline-branch-btn {
     background: none;
@@ -2092,14 +2094,11 @@ const CSS = `
     align-items: center;
     justify-content: center;
     width: 18px;
-    height: 8px;
+    flex: 1;
     border-radius: 2px;
     flex-shrink: 0;
     opacity: 0.7;
     transition: opacity 0.1s, background 0.1s;
-}
-.snap-timeline-branch-btn:first-child {
-    margin-bottom: -3px;
 }
 .snap-timeline-branch-btn:hover {
     opacity: 1;
