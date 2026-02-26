@@ -2006,6 +2006,27 @@ const CSS = `
     font-size: 11px;
     color: var(--descrip-text, #888);
 }
+.snap-workflow-del-btn {
+    flex-shrink: 0;
+    margin-left: 6px;
+    padding: 0 4px;
+    font-size: 14px;
+    line-height: 1;
+    border: none;
+    border-radius: 3px;
+    background: none;
+    color: var(--descrip-text, #888);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.snap-workflow-item:hover .snap-workflow-del-btn {
+    opacity: 1;
+}
+.snap-workflow-del-btn:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.15);
+}
 .snap-workflow-viewing-banner {
     padding: 5px 10px;
     border-bottom: 1px solid var(--border-color, #444);
@@ -2836,6 +2857,38 @@ async function buildSidebar(el) {
 
             row.appendChild(nameSpan);
             row.appendChild(countSpanItem);
+
+            // Delete button — removes all snapshots for this workflow
+            const delBtn = document.createElement("button");
+            delBtn.className = "snap-workflow-del-btn";
+            delBtn.textContent = "\u00D7";
+            delBtn.title = `Delete all snapshots for "${entry.workflowKey}"`;
+            delBtn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                const confirmed = await showConfirmDialog(
+                    `Delete all ${entry.count} snapshot(s) for "${entry.workflowKey}"?`
+                );
+                if (!confirmed) return;
+                try {
+                    await db_deleteAllForWorkflow(entry.workflowKey);
+                    // Clear stale in-memory state for this workflow
+                    lastCapturedIdMap.delete(entry.workflowKey);
+                    lastCapturedHashMap.delete(entry.workflowKey);
+                    lastGraphDataMap.delete(entry.workflowKey);
+                    if (entry.workflowKey === currentKey) {
+                        activeSnapshotId = null;
+                        currentSnapshotId = null;
+                    }
+                    if (viewingWorkflowKey === entry.workflowKey) {
+                        viewingWorkflowKey = null;
+                    }
+                    await populatePicker();
+                    await refresh(true);
+                    if (timelineRefresh) timelineRefresh().catch(() => {});
+                    showToast(`Deleted snapshots for "${entry.workflowKey}"`, "success");
+                } catch {}
+            });
+            row.appendChild(delBtn);
 
             row.addEventListener("click", async () => {
                 if (entry.workflowKey === currentKey) {
