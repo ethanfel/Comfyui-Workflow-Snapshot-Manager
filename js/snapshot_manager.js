@@ -2065,7 +2065,6 @@ const CSS = `
     flex-direction: column;
     align-items: center;
     flex-shrink: 0;
-    gap: 0;
 }
 .snap-timeline-branch-btn {
     background: none;
@@ -2074,12 +2073,13 @@ const CSS = `
     font-size: 8px;
     cursor: pointer;
     padding: 0;
+    margin: 0;
     line-height: 1;
     display: flex;
     align-items: center;
     justify-content: center;
     width: 18px;
-    height: 10px;
+    height: 8px;
     border-radius: 2px;
     flex-shrink: 0;
     opacity: 0.7;
@@ -2088,29 +2088,6 @@ const CSS = `
 .snap-timeline-branch-btn:hover {
     opacity: 1;
     background: rgba(59, 130, 246, 0.2);
-}
-.snap-timeline-fork-marker-wrap {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.snap-timeline-fork-badge {
-    position: absolute;
-    top: -4px;
-    right: -6px;
-    font-size: 7px;
-    font-weight: 700;
-    color: #fff;
-    background: #3b82f6;
-    border-radius: 6px;
-    min-width: 12px;
-    height: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    pointer-events: none;
 }
 .snap-diff-overlay {
     position: fixed;
@@ -3538,17 +3515,8 @@ function buildTimeline() {
                     if (sidebarRefresh) sidebarRefresh().catch(() => {});
                 });
 
-                // Marker with fork count badge
-                const markerWrap = document.createElement("div");
-                markerWrap.className = "snap-timeline-fork-marker-wrap";
-                const badge = document.createElement("span");
-                badge.className = "snap-timeline-fork-badge";
-                badge.textContent = `${children.length}`;
-                markerWrap.appendChild(marker);
-                markerWrap.appendChild(badge);
-
                 group.appendChild(upBtn);
-                group.appendChild(markerWrap);
+                group.appendChild(marker);
                 group.appendChild(downBtn);
                 track.appendChild(group);
             } else {
