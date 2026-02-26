@@ -3536,11 +3536,11 @@ function buildTimeline() {
 
     const expandBtn = document.createElement("button");
     expandBtn.className = "snap-timeline-snap-btn snap-timeline-expand-btn";
-    expandBtn.textContent = "\u25BE";
+    expandBtn.textContent = "\u25B4";
     expandBtn.title = "Expand timeline to show all branches";
     expandBtn.addEventListener("click", () => {
         timelineExpanded = !timelineExpanded;
-        expandBtn.textContent = timelineExpanded ? "\u25B4" : "\u25BE";
+        expandBtn.textContent = timelineExpanded ? "\u25BE" : "\u25B4";
         expandBtn.title = timelineExpanded ? "Collapse timeline" : "Expand timeline to show all branches";
         bar.classList.toggle("snap-timeline-expanded", timelineExpanded);
         refresh();
@@ -3593,7 +3593,7 @@ function buildTimeline() {
         if (!branchingEnabled && timelineExpanded) {
             timelineExpanded = false;
             bar.classList.remove("snap-timeline-expanded");
-            expandBtn.textContent = "\u25BE";
+            expandBtn.textContent = "\u25B4";
         }
 
         const allRecords = await db_getAllForWorkflow(getWorkflowKey());
