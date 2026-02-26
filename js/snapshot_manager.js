@@ -3864,8 +3864,16 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                             // Clear branching state for the old workflow
                             lastCapturedIdMap.delete(prevKey);
                             activeBranchSelections.clear();
-                            // Track session workflow (new key, after switch)
-                            trackSessionWorkflow(getWorkflowKey());
+                            // Seed active ring for the new workflow tab
+                            const newKey = getWorkflowKey();
+                            trackSessionWorkflow(newKey);
+                            db_getAllForWorkflow(newKey).then(recs => {
+                                if (recs.length > 0 && !lastCapturedIdMap.has(newKey)) {
+                                    const latest = recs.reduce((best, r) => r.timestamp > best.timestamp ? r : best);
+                                    lastCapturedIdMap.set(newKey, latest.id);
+                                    if (timelineRefresh) timelineRefresh().catch(() => {});
+                                }
+                            }).catch(() => {});
                             if (sidebarRefresh) {
                                 sidebarRefresh(true).catch(() => {});
                             }
@@ -3889,6 +3897,23 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
 
             // Build the timeline bar on the canvas
             buildTimeline();
+
+            // Seed in-memory state so the active ring shows on reload
+            // and the first auto-capture gets correct change-type detection
+            try {
+                const wfKey = getWorkflowKey();
+                const records = await db_getAllForWorkflow(wfKey);
+                if (records.length > 0) {
+                    const latest = records.reduce((best, r) => r.timestamp > best.timestamp ? r : best);
+                    lastCapturedIdMap.set(wfKey, latest.id);
+                    const graphData = getGraphData();
+                    if (graphData) {
+                        lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(graphData)));
+                        lastGraphDataMap.set(wfKey, graphData);
+                    }
+                    if (timelineRefresh) timelineRefresh().catch(() => {});
+                }
+            } catch {}
 
             // Track initial workflow for profiles
             trackSessionWorkflow(getWorkflowKey());
