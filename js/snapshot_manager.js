@@ -2833,25 +2833,14 @@ async function buildSidebar(el) {
                 if (entry.workflowKey === currentKey) {
                     viewingWorkflowKey = null;
                 } else {
-                    // Try to switch to the workflow in ComfyUI
-                    const wfStore = app.extensionManager?.workflow;
-                    const openWfs = wfStore?.openWorkflows;
-                    if (openWfs) {
-                        const target = openWfs.find(wf =>
-                            (wf.key || wf.filename || wf.path) === entry.workflowKey
-                        );
-                        if (target) {
-                            try {
-                                if (!target.isLoaded && target.load) await target.load();
-                                collapsePicker();
-                                await app.loadGraphData(target.activeState, true, true, target);
-                                // loadGraphData triggers the openWorkflow store action,
-                                // whose listener handles viewingWorkflowKey reset + refresh
-                                return;
-                            } catch { /* fall through to view-only */ }
+                    // Open the workflows sidebar so the user can switch
+                    try {
+                        const sidebarStore = app.extensionManager?.sidebarTab;
+                        const store = sidebarStore?.value ?? sidebarStore;
+                        if (store?.toggleSidebarTab) {
+                            store.toggleSidebarTab("workflows");
                         }
-                    }
-                    // Workflow not open in ComfyUI — view its snapshots only
+                    } catch { /* ignore */ }
                     viewingWorkflowKey = entry.workflowKey;
                 }
                 activeBranchSelections.clear();
