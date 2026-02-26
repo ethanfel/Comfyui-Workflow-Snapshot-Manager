@@ -44,6 +44,7 @@ let svgClipCounter = 0;        // unique prefix for SVG clipPath IDs
 let sidebarTooltipEl = null;   // tooltip element for sidebar hover previews
 const lastCapturedIdMap = new Map(); // workflowKey -> id of most recent capture (for parentId chaining)
 const activeBranchSelections = new Map(); // forkPointId -> selected child index
+let branchingEnabled = true;
 const sessionWorkflows = new Map(); // workflowKey -> { firstSeen, lastSeen }
 
 // ─── Server API Layer ───────────────────────────────────────────────
@@ -1376,10 +1377,12 @@ async function captureSnapshot(label = "Auto") {
 
     // Determine parentId for branching
     let parentId = null;
-    if (activeSnapshotId) {
-        parentId = activeSnapshotId; // fork from swapped snapshot
-    } else if (lastCapturedIdMap.has(workflowKey)) {
-        parentId = lastCapturedIdMap.get(workflowKey); // continuation
+    if (branchingEnabled) {
+        if (activeSnapshotId) {
+            parentId = activeSnapshotId; // fork from swapped snapshot
+        } else if (lastCapturedIdMap.has(workflowKey)) {
+            parentId = lastCapturedIdMap.get(workflowKey); // continuation
+        }
     }
 
     const record = {
@@ -1396,16 +1399,20 @@ async function captureSnapshot(label = "Auto") {
 
     try {
         await db_put(record);
-        // Compute protected IDs: ancestors of this capture + fork points
-        const allRecs = await db_getAllForWorkflow(workflowKey);
-        const tempTree = buildSnapshotTree(allRecs);
-        const ancestors = getAncestorIds(record.id, tempTree.parentOf);
-        // Protect fork points (snapshots with >1 child)
-        for (const [pid, children] of tempTree.childrenOf) {
-            if (children.length > 1) ancestors.add(pid);
+        if (branchingEnabled) {
+            // Compute protected IDs: ancestors of this capture + fork points
+            const allRecs = await db_getAllForWorkflow(workflowKey);
+            const tempTree = buildSnapshotTree(allRecs);
+            const ancestors = getAncestorIds(record.id, tempTree.parentOf);
+            // Protect fork points (snapshots with >1 child)
+            for (const [pid, children] of tempTree.childrenOf) {
+                if (children.length > 1) ancestors.add(pid);
+            }
+            ancestors.add(record.id); // protect the just-captured snapshot
+            await pruneSnapshots(workflowKey, [...ancestors]);
+        } else {
+            await pruneSnapshots(workflowKey);
         }
-        ancestors.add(record.id); // protect the just-captured snapshot
-        await pruneSnapshots(workflowKey, [...ancestors]);
     } catch {
         return false;
     }
@@ -1441,10 +1448,12 @@ async function captureNodeSnapshot(label = "Node Trigger") {
 
     // Determine parentId for branching
     let parentId = null;
-    if (activeSnapshotId) {
-        parentId = activeSnapshotId;
-    } else if (lastCapturedIdMap.has(workflowKey)) {
-        parentId = lastCapturedIdMap.get(workflowKey);
+    if (branchingEnabled) {
+        if (activeSnapshotId) {
+            parentId = activeSnapshotId;
+        } else if (lastCapturedIdMap.has(workflowKey)) {
+            parentId = lastCapturedIdMap.get(workflowKey);
+        }
     }
 
     const record = {
@@ -1462,15 +1471,19 @@ async function captureNodeSnapshot(label = "Node Trigger") {
 
     try {
         await db_put(record);
-        // Compute protected IDs: ancestors + fork points
-        const allRecs = await db_getAllForWorkflow(workflowKey);
-        const tempTree = buildSnapshotTree(allRecs);
-        const protectedNodeIds = getAncestorIds(record.id, tempTree.parentOf);
-        for (const [pid, children] of tempTree.childrenOf) {
-            if (children.length > 1) protectedNodeIds.add(pid);
+        if (branchingEnabled) {
+            // Compute protected IDs: ancestors + fork points
+            const allRecs = await db_getAllForWorkflow(workflowKey);
+            const tempTree = buildSnapshotTree(allRecs);
+            const protectedNodeIds = getAncestorIds(record.id, tempTree.parentOf);
+            for (const [pid, children] of tempTree.childrenOf) {
+                if (children.length > 1) protectedNodeIds.add(pid);
+            }
+            protectedNodeIds.add(record.id);
+            await pruneNodeSnapshots(workflowKey, [...protectedNodeIds]);
+        } else {
+            await pruneNodeSnapshots(workflowKey);
         }
-        protectedNodeIds.add(record.id);
-        await pruneNodeSnapshots(workflowKey, [...protectedNodeIds]);
     } catch {
         return false;
     }
@@ -2660,9 +2673,22 @@ async function buildSidebar(el) {
         filterItems(searchInput.value.toLowerCase());
     });
 
+    const branchToggleBtn = document.createElement("button");
+    branchToggleBtn.className = "snap-filter-auto-btn active";
+    branchToggleBtn.textContent = "Branch";
+    branchToggleBtn.title = "Toggle snapshot branching";
+    branchToggleBtn.addEventListener("click", async () => {
+        branchingEnabled = !branchingEnabled;
+        branchToggleBtn.classList.toggle("active", branchingEnabled);
+        activeBranchSelections.clear();
+        if (sidebarRefresh) await sidebarRefresh().catch(() => {});
+        if (timelineRefresh) await timelineRefresh().catch(() => {});
+    });
+
     searchRow.appendChild(searchInput);
     searchRow.appendChild(searchClear);
     searchRow.appendChild(autoFilterBtn);
+    searchRow.appendChild(branchToggleBtn);
 
     // Workflow selector
     const selectorRow = document.createElement("div");
@@ -3042,21 +3068,26 @@ async function buildSidebar(el) {
             return;
         }
 
-        // Build tree and get display path for current branch
-        const tree = buildSnapshotTree(allRecords);
-        const displayPath = getDisplayPath(tree, activeBranchSelections);
-        // newest first for display
-        const records = [...displayPath].reverse();
+        let records;
+        let tree = null;
+        let forkPointIds = new Set();
+        if (branchingEnabled) {
+            // Build tree and get display path for current branch
+            tree = buildSnapshotTree(allRecords);
+            const displayPath = getDisplayPath(tree, activeBranchSelections);
+            records = [...displayPath].reverse();
 
-        // Build set of fork point IDs and record positions for branch nav insertion
-        const forkPointIds = new Set();
-        for (const [parentId, children] of tree.childrenOf) {
-            if (children.length > 1) forkPointIds.add(parentId);
+            for (const [parentId, children] of tree.childrenOf) {
+                if (children.length > 1) forkPointIds.add(parentId);
+            }
+        } else {
+            // Flat: all records newest-first
+            records = [...allRecords].sort((a, b) => b.timestamp - a.timestamp);
         }
 
         for (const rec of records) {
             // Insert branch navigator above fork-point snapshots
-            if (forkPointIds.has(rec.id)) {
+            if (branchingEnabled && forkPointIds.has(rec.id)) {
                 const children = tree.childrenOf.get(rec.id);
                 const selectedIndex = Math.min(activeBranchSelections.get(rec.id) ?? 0, children.length - 1);
                 const nav = buildBranchNavigator(rec.id, children, selectedIndex, refresh);
@@ -3234,17 +3265,19 @@ async function buildSidebar(el) {
                     if (!confirmed) return;
                 }
                 // Fork-point deletion: rebuild tree from fresh data, then re-parent children
-                const freshRecords = await db_getAllForWorkflow(rec.workflowKey);
-                const freshTree = buildSnapshotTree(freshRecords);
-                const children = freshTree.childrenOf.get(rec.id);
-                if (children && children.length > 0) {
-                    const confirmed = await showConfirmDialog(
-                        `This snapshot is a branch point with ${children.length} child snapshot(s). Deleting it will re-parent them. Continue?`
-                    );
-                    if (!confirmed) return;
-                    const newParent = freshTree.parentOf.get(rec.id) ?? null;
-                    for (const child of children) {
-                        await db_updateMeta(rec.workflowKey, child.id, { parentId: newParent });
+                if (branchingEnabled) {
+                    const freshRecords = await db_getAllForWorkflow(rec.workflowKey);
+                    const freshTree = buildSnapshotTree(freshRecords);
+                    const children = freshTree.childrenOf.get(rec.id);
+                    if (children && children.length > 0) {
+                        const confirmed = await showConfirmDialog(
+                            `This snapshot is a branch point with ${children.length} child snapshot(s). Deleting it will re-parent them. Continue?`
+                        );
+                        if (!confirmed) return;
+                        const newParent = freshTree.parentOf.get(rec.id) ?? null;
+                        for (const child of children) {
+                            await db_updateMeta(rec.workflowKey, child.id, { parentId: newParent });
+                        }
                     }
                 }
                 await db_delete(rec.workflowKey, rec.id);
@@ -3430,14 +3463,20 @@ function buildTimeline() {
             return;
         }
 
-        // Show only current branch's markers
-        const tree = buildSnapshotTree(allRecords);
-        const records = getDisplayPath(tree, activeBranchSelections);
+        let records;
+        let tree = null;
+        let forkPointSet = new Set();
+        if (branchingEnabled) {
+            // Show only current branch's markers
+            tree = buildSnapshotTree(allRecords);
+            records = getDisplayPath(tree, activeBranchSelections);
 
-        // Identify fork points on this path
-        const forkPointSet = new Set();
-        for (const [parentId, children] of tree.childrenOf) {
-            if (children.length > 1) forkPointSet.add(parentId);
+            for (const [parentId, children] of tree.childrenOf) {
+                if (children.length > 1) forkPointSet.add(parentId);
+            }
+        } else {
+            // Flat: all records in timestamp order
+            records = [...allRecords].sort((a, b) => a.timestamp - b.timestamp);
         }
 
         for (const rec of records) {
@@ -3481,8 +3520,8 @@ function buildTimeline() {
                 swapSnapshot(rec);
             });
 
-            // Fork point: vertical stack — up arrow, marker with badge, down arrow
-            if (forkPointSet.has(rec.id)) {
+            // Fork point: vertical stack — up arrow, marker, down arrow
+            if (branchingEnabled && forkPointSet.has(rec.id)) {
                 const children = tree.childrenOf.get(rec.id);
                 const selectedIndex = Math.min(activeBranchSelections.get(rec.id) ?? 0, children.length - 1);
 
