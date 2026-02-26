@@ -1647,6 +1647,29 @@ const CSS = `
 .snap-search-clear.visible {
     visibility: visible;
 }
+.snap-filter-auto-btn {
+    background: none;
+    border: 1px solid var(--border-color, #555);
+    color: var(--descrip-text, #888);
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.snap-filter-auto-btn:hover {
+    border-color: var(--descrip-text, #888);
+    color: var(--input-text, #ccc);
+}
+.snap-filter-auto-btn.active {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: #3b82f6;
+    color: #3b82f6;
+}
 .snap-list {
     flex: 1;
     overflow-y: auto;
@@ -2636,8 +2659,22 @@ async function buildSidebar(el) {
         filterItems(term.toLowerCase());
     });
 
+    let hideAutoSaves = false;
+
+    const autoFilterBtn = document.createElement("button");
+    autoFilterBtn.className = "snap-filter-auto-btn";
+    autoFilterBtn.textContent = "Hide Auto";
+    autoFilterBtn.title = "Hide auto-save snapshots";
+    autoFilterBtn.addEventListener("click", () => {
+        hideAutoSaves = !hideAutoSaves;
+        autoFilterBtn.classList.toggle("active", hideAutoSaves);
+        autoFilterBtn.textContent = hideAutoSaves ? "Show Auto" : "Hide Auto";
+        filterItems(searchInput.value.toLowerCase());
+    });
+
     searchRow.appendChild(searchInput);
     searchRow.appendChild(searchClear);
+    searchRow.appendChild(autoFilterBtn);
 
     // Workflow selector
     const selectorRow = document.createElement("div");
@@ -2954,8 +2991,9 @@ async function buildSidebar(el) {
 
     function filterItems(term) {
         for (const entry of itemEntries) {
-            const match = !term || entry.label.toLowerCase().includes(term) || entry.notes.toLowerCase().includes(term);
-            entry.element.style.display = match ? "" : "none";
+            const matchesSearch = !term || entry.label.toLowerCase().includes(term) || entry.notes.toLowerCase().includes(term);
+            const matchesAutoFilter = !hideAutoSaves || !entry.isAuto;
+            entry.element.style.display = (matchesSearch && matchesAutoFilter) ? "" : "none";
         }
     }
 
@@ -3329,12 +3367,12 @@ async function buildSidebar(el) {
             item.appendChild(actions);
             list.appendChild(item);
 
-            itemEntries.push({ element: item, label: rec.label, notes: rec.notes || "" });
+            itemEntries.push({ element: item, label: rec.label, notes: rec.notes || "", isAuto: rec.label === "Auto" || rec.label === "Initial" });
         }
 
-        // Re-apply current search filter to newly built items
+        // Re-apply current filters to newly built items
         const currentTerm = searchInput.value.toLowerCase();
-        if (currentTerm) {
+        if (currentTerm || hideAutoSaves) {
             filterItems(currentTerm);
         }
     }
