@@ -40,6 +40,43 @@ async def list_snapshots(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+@routes.post("/snapshot-manager/get")
+async def get_snapshot(request):
+    try:
+        data = await request.json()
+        workflow_key = data.get("workflowKey")
+        snapshot_id = data.get("id")
+        if not workflow_key or not snapshot_id:
+            return web.json_response({"error": "Missing workflowKey or id"}, status=400)
+        record = storage.get_full_record(workflow_key, snapshot_id)
+        if record is None:
+            return web.json_response({"error": "Not found"}, status=404)
+        return web.json_response(record)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+@routes.post("/snapshot-manager/update-meta")
+async def update_snapshot_meta(request):
+    try:
+        data = await request.json()
+        workflow_key = data.get("workflowKey")
+        snapshot_id = data.get("id")
+        fields = data.get("fields")
+        if not workflow_key or not snapshot_id or not isinstance(fields, dict):
+            return web.json_response({"error": "Missing workflowKey, id, or fields"}, status=400)
+        ok = storage.update_meta(workflow_key, snapshot_id, fields)
+        if not ok:
+            return web.json_response({"error": "Not found"}, status=404)
+        return web.json_response({"ok": True})
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 @routes.post("/snapshot-manager/delete")
 async def delete_snapshot(request):
     try:

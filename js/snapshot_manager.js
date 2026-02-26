@@ -132,6 +132,38 @@ async function db_getAllWorkflowKeys() {
     }
 }
 
+async function db_updateMeta(workflowKey, id, fields) {
+    try {
+        const resp = await api.fetchApi("/snapshot-manager/update-meta", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflowKey, id, fields }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || resp.statusText);
+        }
+    } catch (err) {
+        console.warn(`[${EXTENSION_NAME}] Update meta failed:`, err);
+        showToast("Failed to update snapshot", "error");
+    }
+}
+
+async function db_getFullRecord(workflowKey, id) {
+    try {
+        const resp = await api.fetchApi("/snapshot-manager/get", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflowKey, id }),
+        });
+        if (!resp.ok) return null;
+        return await resp.json();
+    } catch (err) {
+        console.warn(`[${EXTENSION_NAME}] Get full record failed:`, err);
+        return null;
+    }
+}
+
 async function pruneSnapshots(workflowKey) {
     try {
         const resp = await api.fetchApi("/snapshot-manager/prune", {
@@ -1115,7 +1147,13 @@ function showDiffModal(baseLabel, targetLabel, diff, allNodes, baseGraphData, ta
 
 // ─── Preview Modal ──────────────────────────────────────────────────
 
-function showPreviewModal(record) {
+async function showPreviewModal(record) {
+    if (!record.graphData) {
+        const full = await db_getFullRecord(record.workflowKey, record.id);
+        if (!full) { showToast("Failed to load snapshot data", "error"); return; }
+        record = full;
+    }
+
     const overlay = document.createElement("div");
     overlay.className = "snap-preview-overlay";
 
@@ -1281,6 +1319,11 @@ function scheduleCaptureSnapshot() {
 // ─── Restore ─────────────────────────────────────────────────────────
 
 async function restoreSnapshot(record) {
+    if (!record.graphData) {
+        const full = await db_getFullRecord(record.workflowKey, record.id);
+        if (!full) { showToast("Failed to load snapshot data", "error"); return; }
+        record = full;
+    }
     await withRestoreLock(async () => {
         if (!validateSnapshotData(record.graphData)) {
             showToast("Invalid snapshot data", "error");
@@ -1314,6 +1357,12 @@ async function swapSnapshot(record) {
     if (!activeSnapshotId) {
         const capturedId = await captureSnapshot("Current");
         currentSnapshotId = capturedId || prevCurrentId;
+    }
+
+    if (!record.graphData) {
+        const full = await db_getFullRecord(record.workflowKey, record.id);
+        if (!full) { showToast("Failed to load snapshot data", "error"); return; }
+        record = full;
     }
 
     await withRestoreLock(async () => {
@@ -2435,7 +2484,7 @@ async function buildSidebar(el) {
                     const newLabel = input.value.trim() || originalLabel;
                     if (newLabel !== originalLabel) {
                         rec.label = newLabel;
-                        await db_put(rec);
+                        await db_updateMeta(rec.workflowKey, rec.id, { label: newLabel });
                         await refresh();
                     } else {
                         labelDiv.textContent = originalLabel;
@@ -2515,7 +2564,7 @@ async function buildSidebar(el) {
                     saved = true;
                     const newNotes = textarea.value.trim();
                     rec.notes = newNotes || undefined;
-                    await db_put(rec);
+                    await db_updateMeta(rec.workflowKey, rec.id, { notes: newNotes || null });
                     await refresh();
                 };
                 textarea.addEventListener("keydown", (ev) => {
@@ -2533,7 +2582,7 @@ async function buildSidebar(el) {
             lockBtn.title = rec.locked ? "Unlock snapshot" : "Lock snapshot";
             lockBtn.addEventListener("click", async () => {
                 rec.locked = !rec.locked;
-                await db_put(rec);
+                await db_updateMeta(rec.workflowKey, rec.id, { locked: rec.locked });
                 await refresh();
             });
 
@@ -2592,26 +2641,31 @@ async function buildSidebar(el) {
                     refresh();
                     return;
                 }
-                // Normal click
-                let baseGraph, targetGraph, baseLabel, targetLabel;
-                if (diffBaseSnapshot && diffBaseSnapshot.id !== rec.id) {
-                    // Two-snapshot compare: base vs this
-                    baseGraph = diffBaseSnapshot.graphData || {};
-                    targetGraph = rec.graphData || {};
-                    baseLabel = diffBaseSnapshot.label;
-                    targetLabel = rec.label;
-                    diffBaseSnapshot = null;
-                    refresh(); // clear highlight
-                } else {
-                    // Compare this snapshot vs current live workflow
-                    baseGraph = rec.graphData || {};
-                    targetGraph = getGraphData() || {};
-                    baseLabel = rec.label;
-                    targetLabel = "Current Workflow";
-                }
-                const diff = computeDetailedDiff(baseGraph, targetGraph);
-                const allNodes = buildNodeLookup(baseGraph, targetGraph);
-                showDiffModal(baseLabel, targetLabel, diff, allNodes, baseGraph, targetGraph);
+                // Normal click — async to allow lazy graphData fetch
+                (async () => {
+                    let baseGraph, targetGraph, baseLabel, targetLabel;
+                    if (diffBaseSnapshot && diffBaseSnapshot.id !== rec.id) {
+                        // Two-snapshot compare: base vs this
+                        const baseFull = diffBaseSnapshot.graphData ? diffBaseSnapshot : await db_getFullRecord(diffBaseSnapshot.workflowKey, diffBaseSnapshot.id);
+                        const targetFull = rec.graphData ? rec : await db_getFullRecord(rec.workflowKey, rec.id);
+                        baseGraph = (baseFull && baseFull.graphData) || {};
+                        targetGraph = (targetFull && targetFull.graphData) || {};
+                        baseLabel = diffBaseSnapshot.label;
+                        targetLabel = rec.label;
+                        diffBaseSnapshot = null;
+                        refresh(); // clear highlight
+                    } else {
+                        // Compare this snapshot vs current live workflow
+                        const full = rec.graphData ? rec : await db_getFullRecord(rec.workflowKey, rec.id);
+                        baseGraph = (full && full.graphData) || {};
+                        targetGraph = getGraphData() || {};
+                        baseLabel = rec.label;
+                        targetLabel = "Current Workflow";
+                    }
+                    const diff = computeDetailedDiff(baseGraph, targetGraph);
+                    const allNodes = buildNodeLookup(baseGraph, targetGraph);
+                    showDiffModal(baseLabel, targetLabel, diff, allNodes, baseGraph, targetGraph);
+                })();
             });
 
             const previewBtn = document.createElement("button");
@@ -2633,8 +2687,16 @@ async function buildSidebar(el) {
 
             // Hover tooltip
             item.addEventListener("mouseenter", () => {
-                tooltipTimer = setTimeout(() => {
-                    const svg = getCachedSVG(rec.id, rec.graphData, { width: 240, height: 180 });
+                tooltipTimer = setTimeout(async () => {
+                    const svgCacheKey = `${rec.id}:240x180`;
+                    let graphData = rec.graphData;
+                    if (!graphData && !svgCache.has(svgCacheKey)) {
+                        const full = await db_getFullRecord(rec.workflowKey, rec.id);
+                        if (!full || !tooltipTimer) return; // abort if mouse already left
+                        graphData = full.graphData;
+                    }
+                    if (!tooltipTimer) return; // abort if mouse left during fetch
+                    const svg = getCachedSVG(rec.id, graphData, { width: 240, height: 180 });
                     if (!svg) return;
                     tooltip.innerHTML = "";
                     tooltip.appendChild(svg);
