@@ -2083,20 +2083,23 @@ const CSS = `
     background: none;
     border: none;
     color: #3b82f6;
-    font-size: 6px;
+    font-size: 8px;
     cursor: pointer;
     padding: 0;
     margin: 0;
-    line-height: 0;
+    line-height: 1;
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: center;
     width: 18px;
-    height: 6px;
+    height: 8px;
     border-radius: 2px;
     flex-shrink: 0;
     opacity: 0.7;
     transition: opacity 0.1s, background 0.1s;
+}
+.snap-timeline-branch-btn:last-child {
+    align-items: flex-start;
 }
 .snap-timeline-branch-btn:hover {
     opacity: 1;
