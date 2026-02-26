@@ -2191,9 +2191,6 @@ const CSS = `
     background: rgba(59, 130, 246, 0.12);
     border-left-color: #3b82f6;
 }
-.snap-timeline-marker-dimmed {
-    opacity: 0.35;
-}
 .snap-diff-overlay {
     position: fixed;
     inset: 0;
@@ -2836,6 +2833,23 @@ async function buildSidebar(el) {
                 if (entry.workflowKey === currentKey) {
                     viewingWorkflowKey = null;
                 } else {
+                    // Try to switch to the workflow in ComfyUI
+                    const wfStore = app.extensionManager?.workflow;
+                    const openWfs = wfStore?.openWorkflows;
+                    if (openWfs && wfStore.openWorkflow) {
+                        const target = openWfs.find(wf =>
+                            (wf.key || wf.filename || wf.path) === entry.workflowKey
+                        );
+                        if (target) {
+                            try {
+                                collapsePicker();
+                                await wfStore.openWorkflow(target);
+                                // openWorkflow listener handles viewingWorkflowKey reset + refresh
+                                return;
+                            } catch { /* fall through to view-only */ }
+                        }
+                    }
+                    // Workflow not open in ComfyUI — view its snapshots only
                     viewingWorkflowKey = entry.workflowKey;
                 }
                 activeBranchSelections.clear();
@@ -3553,7 +3567,7 @@ function buildTimeline() {
     canvasParent.appendChild(bar);
     timelineEl = bar;
 
-    function buildMarker(rec, { dimmed = false, onClickBranch = null } = {}) {
+    function buildMarker(rec, { onClickBranch = null } = {}) {
         const marker = document.createElement("div");
         marker.className = "snap-timeline-marker";
 
@@ -3571,7 +3585,6 @@ function buildTimeline() {
             marker.classList.add("snap-timeline-marker-current");
             marker.style.setProperty("--snap-marker-color", "#10b981");
         }
-        if (dimmed) marker.classList.add("snap-timeline-marker-dimmed");
 
         let tip = `${rec.label} — ${formatTime(rec.timestamp)}\n${iconInfo.label}`;
         if (rec.notes) tip += `\n${rec.notes}`;
@@ -3630,15 +3643,23 @@ function buildTimeline() {
                 const isActiveBranch = branchLeafId === currentLeafId;
                 if (isActiveBranch) row.classList.add("snap-timeline-branch-row-active");
 
+                let skippedCount = 0;
                 for (const rec of branch) {
-                    const isSharedAncestor = !isActiveBranch && currentIds.has(rec.id);
+                    if (!isActiveBranch && currentIds.has(rec.id)) {
+                        skippedCount++;
+                        continue;
+                    }
                     const marker = buildMarker(rec, {
-                        dimmed: isSharedAncestor,
                         onClickBranch: isActiveBranch ? null : () => {
                             selectBranchContaining(branchLeafId, tree);
                         },
                     });
                     row.appendChild(marker);
+                }
+
+                // Indent non-active rows so fork points align with the active branch
+                if (skippedCount > 0) {
+                    row.style.paddingLeft = `${6 + skippedCount * 24}px`;
                 }
 
                 track.appendChild(row);
