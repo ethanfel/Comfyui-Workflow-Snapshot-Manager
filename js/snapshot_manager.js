@@ -3675,6 +3675,10 @@ function buildTimeline() {
         let tree = null;
         if (branchingEnabled) {
             tree = buildSnapshotTree(allRecords);
+            // Auto-select branch containing the active snapshot on first render
+            if (activeBranchSelections.size === 0 && effectiveActiveId && tree.byId.has(effectiveActiveId)) {
+                selectBranchContaining(effectiveActiveId, tree);
+            }
         }
 
         // ── Expanded mode: one row per branch ──
