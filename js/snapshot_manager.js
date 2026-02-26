@@ -3530,10 +3530,14 @@ function buildTimeline() {
                 const group = document.createElement("div");
                 group.className = "snap-timeline-fork-group";
 
+                // Arrow color matches the marker
+                const arrowColor = marker.style.getPropertyValue("--snap-marker-color") || "#3b82f6";
+
                 // Up arrow (previous branch)
                 const upBtn = document.createElement("button");
                 upBtn.className = "snap-timeline-branch-btn";
                 upBtn.textContent = "\u25B2";
+                upBtn.style.color = arrowColor;
                 upBtn.title = `Branch ${selectedIndex}/${children.length}`;
                 if (selectedIndex <= 0) upBtn.style.visibility = "hidden";
                 upBtn.addEventListener("click", (e) => {
@@ -3547,6 +3551,7 @@ function buildTimeline() {
                 const downBtn = document.createElement("button");
                 downBtn.className = "snap-timeline-branch-btn";
                 downBtn.textContent = "\u25BC";
+                downBtn.style.color = arrowColor;
                 downBtn.title = `Branch ${selectedIndex + 2}/${children.length}`;
                 if (selectedIndex >= children.length - 1) downBtn.style.visibility = "hidden";
                 downBtn.addEventListener("click", (e) => {
