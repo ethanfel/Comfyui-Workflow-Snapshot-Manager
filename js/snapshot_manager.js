@@ -1411,8 +1411,16 @@ async function showPreviewModal(record) {
 
 // ─── Snapshot Capture ────────────────────────────────────────────────
 
+let captureInProgress = false;
+
 async function captureSnapshot(label = "Auto") {
     if (restoreLock) return false;
+    if (captureInProgress) return false;
+    captureInProgress = true;
+    try { return await _captureSnapshotInner(label); } finally { captureInProgress = false; }
+}
+
+async function _captureSnapshotInner(label) {
 
     const graphData = getGraphData();
     if (!graphData) return false;
