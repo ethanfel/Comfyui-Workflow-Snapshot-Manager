@@ -1376,13 +1376,20 @@ async function showPreviewModal(record) {
     const body = document.createElement("div");
     body.className = "snap-preview-body";
 
+    if (record.thumbnail) {
+        const thumbImg = document.createElement("img");
+        thumbImg.src = `data:image/jpeg;base64,${record.thumbnail}`;
+        thumbImg.style.cssText = "max-width:100%;max-height:300px;border-radius:6px;margin-bottom:12px;display:block;";
+        body.appendChild(thumbImg);
+    }
+
     const svg = renderGraphSVG(record.graphData, {
         width: 860, height: 600,
         showLabels: true, showLinks: true, showSlots: true, showGroups: true,
     });
     if (svg) {
         body.appendChild(svg);
-    } else {
+    } else if (!record.thumbnail) {
         const fallback = document.createElement("div");
         fallback.style.cssText = "color: #666; font-size: 13px; padding: 32px;";
         fallback.textContent = "Unable to render preview";
@@ -1502,7 +1509,7 @@ async function _captureSnapshotInner(label) {
     return record.id;
 }
 
-async function captureNodeSnapshot(label = "Node Trigger") {
+async function captureNodeSnapshot(label = "Node Trigger", thumbnail = null) {
     if (restoreLock) return false;
 
     const graphData = getGraphData();
@@ -1536,6 +1543,7 @@ async function captureNodeSnapshot(label = "Node Trigger") {
         source: "node",
         changeType,
         parentId,
+        ...(thumbnail ? { thumbnail } : {}),
     };
 
     try {
@@ -1775,6 +1783,13 @@ const CSS = `
 }
 .snap-item:hover {
     background: var(--comfy-menu-bg, #2a2a2a);
+}
+.snap-item-thumb {
+    width: 40px;
+    height: 30px;
+    object-fit: cover;
+    border-radius: 3px;
+    flex-shrink: 0;
 }
 .snap-item-info {
     flex: 1;
@@ -3530,18 +3545,25 @@ async function buildSidebar(el) {
             // Hover tooltip
             item.addEventListener("mouseenter", () => {
                 tooltipTimer = setTimeout(async () => {
-                    const svgCacheKey = `${rec.id}:240x180`;
-                    let graphData = rec.graphData;
-                    if (!graphData && !svgCache.has(svgCacheKey)) {
-                        const full = await db_getFullRecord(rec.workflowKey, rec.id);
-                        if (!full || !tooltipTimer) return; // abort if mouse already left
-                        graphData = full.graphData;
-                    }
-                    if (!tooltipTimer) return; // abort if mouse left during fetch
-                    const svg = getCachedSVG(rec.id, graphData, { width: 240, height: 180 });
-                    if (!svg) return;
                     tooltip.innerHTML = "";
-                    tooltip.appendChild(svg);
+                    if (rec.thumbnail) {
+                        const img = document.createElement("img");
+                        img.src = `data:image/jpeg;base64,${rec.thumbnail}`;
+                        img.style.cssText = "max-width:240px;max-height:180px;border-radius:4px;display:block;";
+                        tooltip.appendChild(img);
+                    } else {
+                        const svgCacheKey = `${rec.id}:240x180`;
+                        let graphData = rec.graphData;
+                        if (!graphData && !svgCache.has(svgCacheKey)) {
+                            const full = await db_getFullRecord(rec.workflowKey, rec.id);
+                            if (!full || !tooltipTimer) return;
+                            graphData = full.graphData;
+                        }
+                        if (!tooltipTimer) return;
+                        const svg = getCachedSVG(rec.id, graphData, { width: 240, height: 180 });
+                        if (!svg) return;
+                        tooltip.appendChild(svg);
+                    }
                     const rect = item.getBoundingClientRect();
                     let left = rect.right + 8;
                     let top = rect.top;
@@ -3559,6 +3581,12 @@ async function buildSidebar(el) {
                 tooltip.classList.remove("visible");
             });
 
+            if (rec.thumbnail) {
+                const thumb = document.createElement("img");
+                thumb.className = "snap-item-thumb";
+                thumb.src = `data:image/jpeg;base64,${rec.thumbnail}`;
+                item.appendChild(thumb);
+            }
             item.appendChild(info);
             item.appendChild(actions);
             list.appendChild(item);
@@ -3924,7 +3952,8 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
             // Listen for node-triggered snapshot captures via WebSocket
             api.addEventListener("snapshot-manager-capture", (event) => {
                 const label = event.detail?.label || "Node Trigger";
-                captureNodeSnapshot(label).catch((err) => {
+                const thumbnail = event.detail?.thumbnail || null;
+                captureNodeSnapshot(label, thumbnail).catch((err) => {
                     console.warn(`[${EXTENSION_NAME}] Node-triggered capture failed:`, err);
                 });
             });

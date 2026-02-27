@@ -1,3 +1,6 @@
+import base64
+import io
+
 from server import PromptServer
 
 
@@ -7,6 +10,30 @@ class _AnyType(str):
 
 
 ANY_TYPE = _AnyType("*")
+
+
+def _make_thumbnail(value):
+    """Convert an image tensor to a base64 JPEG thumbnail, or return None."""
+    try:
+        import torch
+        if not isinstance(value, torch.Tensor):
+            return None
+        if value.ndim != 4 or value.shape[3] not in (3, 4):
+            return None
+
+        from PIL import Image
+
+        frame = value[0]  # first frame only
+        if frame.shape[2] == 4:
+            frame = frame[:, :, :3]  # drop alpha
+        arr = frame.clamp(0, 1).mul(255).byte().cpu().numpy()
+        img = Image.fromarray(arr, mode="RGB")
+        img.thumbnail((200, 150), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=75)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
 
 
 class SaveSnapshot:
@@ -33,7 +60,11 @@ class SaveSnapshot:
         return float("NaN")
 
     def execute(self, value, label):
+        payload = {"label": label}
+        thumbnail = _make_thumbnail(value)
+        if thumbnail is not None:
+            payload["thumbnail"] = thumbnail
         PromptServer.instance.send_sync(
-            "snapshot-manager-capture", {"label": label}
+            "snapshot-manager-capture", payload
         )
         return (value,)
