@@ -24,6 +24,7 @@ let autoCaptureEnabled = true;
 let captureOnLoad = true;
 let maxNodeSnapshots = 5;
 let showTimeline = false;
+let branchingDefault = true; // updated by ComfyUI settings onChange
 
 // ─── State ───────────────────────────────────────────────────────────
 
@@ -44,7 +45,11 @@ let svgClipCounter = 0;        // unique prefix for SVG clipPath IDs
 let sidebarTooltipEl = null;   // tooltip element for sidebar hover previews
 const lastCapturedIdMap = new Map(); // workflowKey -> id of most recent capture (for parentId chaining)
 const activeBranchSelections = new Map(); // forkPointId -> selected child index
-let branchingEnabled = localStorage.getItem("snapshotManager_branchingEnabled") !== "false";
+const workflowBranchOverrides = new Map(); // workflowKey -> true|false
+try {
+    const saved = localStorage.getItem("snapshotManager_branchOverrides");
+    if (saved) for (const [k, v] of JSON.parse(saved)) workflowBranchOverrides.set(k, v);
+} catch {}
 let timelineExpanded = localStorage.getItem("snapshotManager_timelineExpanded") === "true";
 const sessionWorkflows = new Map(); // workflowKey -> { firstSeen, lastSeen }
 
@@ -340,6 +345,12 @@ function getWorkflowKey() {
 
 function getEffectiveWorkflowKey() {
     return viewingWorkflowKey ?? getWorkflowKey();
+}
+
+function isBranchingEnabled(wk) {
+    if (!wk) wk = getEffectiveWorkflowKey();
+    if (workflowBranchOverrides.has(wk)) return workflowBranchOverrides.get(wk);
+    return branchingDefault;
 }
 
 function getGraphData() {
@@ -1445,7 +1456,7 @@ async function _captureSnapshotInner(label) {
 
     // Determine parentId for branching
     let parentId = null;
-    if (branchingEnabled) {
+    if (isBranchingEnabled(workflowKey)) {
         if (activeSnapshotId) {
             parentId = activeSnapshotId; // fork from swapped snapshot
         } else if (lastCapturedIdMap.has(workflowKey)) {
@@ -1467,7 +1478,7 @@ async function _captureSnapshotInner(label) {
 
     try {
         await db_put(record);
-        if (branchingEnabled) {
+        if (isBranchingEnabled(workflowKey)) {
             // Compute protected IDs: ancestors of this capture + fork points + ancestors of locked snapshots
             const allRecs = await db_getAllForWorkflow(workflowKey);
             const tempTree = buildSnapshotTree(allRecs);
@@ -1524,7 +1535,7 @@ async function captureNodeSnapshot(label = "Node Trigger", thumbnail = null) {
 
     // Determine parentId for branching
     let parentId = null;
-    if (branchingEnabled) {
+    if (isBranchingEnabled(workflowKey)) {
         if (activeSnapshotId) {
             parentId = activeSnapshotId;
         } else if (lastCapturedIdMap.has(workflowKey)) {
@@ -1548,7 +1559,7 @@ async function captureNodeSnapshot(label = "Node Trigger", thumbnail = null) {
 
     try {
         await db_put(record);
-        if (branchingEnabled) {
+        if (isBranchingEnabled(workflowKey)) {
             // Compute protected IDs: ancestors + fork points + ancestors of locked snapshots
             const allRecs = await db_getAllForWorkflow(workflowKey);
             const tempTree = buildSnapshotTree(allRecs);
@@ -2830,13 +2841,16 @@ async function buildSidebar(el) {
     });
 
     const branchToggleBtn = document.createElement("button");
-    branchToggleBtn.className = "snap-filter-auto-btn" + (branchingEnabled ? " active" : "");
+    branchToggleBtn.className = "snap-filter-auto-btn" + (isBranchingEnabled() ? " active" : "");
     branchToggleBtn.textContent = "Branch";
     branchToggleBtn.title = "Toggle snapshot branching";
     branchToggleBtn.addEventListener("click", async () => {
-        branchingEnabled = !branchingEnabled;
-        localStorage.setItem("snapshotManager_branchingEnabled", branchingEnabled);
-        branchToggleBtn.classList.toggle("active", branchingEnabled);
+        const wk = getEffectiveWorkflowKey();
+        const current = isBranchingEnabled();
+        workflowBranchOverrides.set(wk, !current);
+        localStorage.setItem("snapshotManager_branchOverrides",
+            JSON.stringify([...workflowBranchOverrides]));
+        branchToggleBtn.classList.toggle("active", !current);
         activeBranchSelections.clear();
         if (sidebarRefresh) await sidebarRefresh().catch(() => {});
         if (timelineRefresh) await timelineRefresh().catch(() => {});
@@ -3269,7 +3283,7 @@ async function buildSidebar(el) {
         let records;
         let tree = null;
         let forkPointIds = new Set();
-        if (branchingEnabled) {
+        if (isBranchingEnabled()) {
             // Build tree and get display path for current branch
             tree = buildSnapshotTree(allRecords);
             const displayPath = getDisplayPath(tree, activeBranchSelections);
@@ -3285,7 +3299,7 @@ async function buildSidebar(el) {
 
         for (const rec of records) {
             // Insert branch navigator above fork-point snapshots
-            if (branchingEnabled && forkPointIds.has(rec.id)) {
+            if (isBranchingEnabled() && forkPointIds.has(rec.id)) {
                 const children = tree.childrenOf.get(rec.id);
                 const selectedIndex = Math.min(activeBranchSelections.get(rec.id) ?? 0, children.length - 1);
                 const nav = buildBranchNavigator(rec.id, children, selectedIndex, refresh);
@@ -3463,7 +3477,7 @@ async function buildSidebar(el) {
                     if (!confirmed) return;
                 }
                 // Fork-point deletion: rebuild tree from fresh data, then re-parent children
-                if (branchingEnabled) {
+                if (isBranchingEnabled()) {
                     const freshRecords = await db_getAllForWorkflow(rec.workflowKey);
                     const freshTree = buildSnapshotTree(freshRecords);
                     const children = freshTree.childrenOf.get(rec.id);
@@ -3709,16 +3723,16 @@ function buildTimeline() {
     async function refresh() {
         if (!showTimeline) return;
 
+        const wfKey = getWorkflowKey();
+
         // Hide/show expand button based on branching
-        expandBtn.style.display = branchingEnabled ? "" : "none";
-        if (!branchingEnabled && timelineExpanded) {
+        expandBtn.style.display = isBranchingEnabled(wfKey) ? "" : "none";
+        if (!isBranchingEnabled(wfKey) && timelineExpanded) {
             timelineExpanded = false;
             localStorage.setItem("snapshotManager_timelineExpanded", "false");
             bar.classList.remove("snap-timeline-expanded");
             expandBtn.textContent = "\u25B4";
         }
-
-        const wfKey = getWorkflowKey();
         const allRecords = await db_getAllForWorkflow(wfKey);
 
         track.innerHTML = "";
@@ -3736,7 +3750,7 @@ function buildTimeline() {
         const latestId = allRecords.reduce((best, r) => (!best || r.timestamp > best.timestamp) ? r : best, null)?.id ?? null;
 
         let tree = null;
-        if (branchingEnabled) {
+        if (isBranchingEnabled(wfKey)) {
             tree = buildSnapshotTree(allRecords);
             // Auto-select branch containing the active snapshot on first render
             if (activeBranchSelections.size === 0 && effectiveActiveId && tree.byId.has(effectiveActiveId)) {
@@ -3745,7 +3759,7 @@ function buildTimeline() {
         }
 
         // ── Expanded mode: one row per branch ──
-        if (timelineExpanded && branchingEnabled) {
+        if (timelineExpanded && isBranchingEnabled(wfKey)) {
             const allBranches = getAllBranches(tree);
             const currentPath = getDisplayPath(tree, activeBranchSelections);
             const currentIds = new Set(currentPath.map(r => r.id));
@@ -3790,7 +3804,7 @@ function buildTimeline() {
         // ── Collapsed mode (default) ──
         let records;
         let forkPointSet = new Set();
-        if (branchingEnabled) {
+        if (isBranchingEnabled(wfKey)) {
             records = getDisplayPath(tree, activeBranchSelections);
             for (const [parentId, children] of tree.childrenOf) {
                 if (children.length > 1) forkPointSet.add(parentId);
@@ -3803,7 +3817,7 @@ function buildTimeline() {
             const marker = buildMarker(rec, { isLatest: rec.id === latestId, activeId: effectiveActiveId });
 
             // Fork point: vertical stack — up arrow, marker, down arrow
-            if (branchingEnabled && forkPointSet.has(rec.id)) {
+            if (isBranchingEnabled(wfKey) && forkPointSet.has(rec.id)) {
                 const children = tree.childrenOf.get(rec.id);
                 const selectedIndex = Math.min(activeBranchSelections.get(rec.id) ?? 0, children.length - 1);
 
@@ -3922,6 +3936,18 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                     showTimeline = value;
                     if (timelineEl) timelineEl.style.display = value ? "" : "none";
                     if (value && timelineRefresh) timelineRefresh().catch(() => {});
+                },
+            },
+            {
+                id: "SnapshotManager.branchingDefault",
+                name: "Enable branching by default",
+                type: "boolean",
+                defaultValue: true,
+                category: ["Snapshot Manager", "Branching", "Enable branching by default"],
+                onChange(value) {
+                    branchingDefault = value;
+                    if (sidebarRefresh) sidebarRefresh().catch(() => {});
+                    if (timelineRefresh) timelineRefresh().catch(() => {});
                 },
             },
         ],
