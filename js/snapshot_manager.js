@@ -44,8 +44,8 @@ let svgClipCounter = 0;        // unique prefix for SVG clipPath IDs
 let sidebarTooltipEl = null;   // tooltip element for sidebar hover previews
 const lastCapturedIdMap = new Map(); // workflowKey -> id of most recent capture (for parentId chaining)
 const activeBranchSelections = new Map(); // forkPointId -> selected child index
-let branchingEnabled = true;
-let timelineExpanded = false;
+let branchingEnabled = localStorage.getItem("snapshotManager_branchingEnabled") !== "false";
+let timelineExpanded = localStorage.getItem("snapshotManager_timelineExpanded") === "true";
 const sessionWorkflows = new Map(); // workflowKey -> { firstSeen, lastSeen }
 
 // ─── Server API Layer ───────────────────────────────────────────────
@@ -2807,11 +2807,12 @@ async function buildSidebar(el) {
     });
 
     const branchToggleBtn = document.createElement("button");
-    branchToggleBtn.className = "snap-filter-auto-btn active";
+    branchToggleBtn.className = "snap-filter-auto-btn" + (branchingEnabled ? " active" : "");
     branchToggleBtn.textContent = "Branch";
     branchToggleBtn.title = "Toggle snapshot branching";
     branchToggleBtn.addEventListener("click", async () => {
         branchingEnabled = !branchingEnabled;
+        localStorage.setItem("snapshotManager_branchingEnabled", branchingEnabled);
         branchToggleBtn.classList.toggle("active", branchingEnabled);
         activeBranchSelections.clear();
         if (sidebarRefresh) await sidebarRefresh().catch(() => {});
@@ -3610,10 +3611,11 @@ function buildTimeline() {
 
     const expandBtn = document.createElement("button");
     expandBtn.className = "snap-timeline-snap-btn snap-timeline-expand-btn";
-    expandBtn.textContent = "\u25B4";
-    expandBtn.title = "Expand timeline to show all branches";
+    expandBtn.textContent = timelineExpanded ? "\u25BE" : "\u25B4";
+    expandBtn.title = timelineExpanded ? "Collapse timeline" : "Expand timeline to show all branches";
     expandBtn.addEventListener("click", () => {
         timelineExpanded = !timelineExpanded;
+        localStorage.setItem("snapshotManager_timelineExpanded", timelineExpanded);
         expandBtn.textContent = timelineExpanded ? "\u25BE" : "\u25B4";
         expandBtn.title = timelineExpanded ? "Collapse timeline" : "Expand timeline to show all branches";
         bar.classList.toggle("snap-timeline-expanded", timelineExpanded);
@@ -3624,6 +3626,7 @@ function buildTimeline() {
     bar.appendChild(expandBtn);
     bar.appendChild(snapBtn);
 
+    if (timelineExpanded) bar.classList.add("snap-timeline-expanded");
     canvasParent.appendChild(bar);
     timelineEl = bar;
 
@@ -3666,6 +3669,7 @@ function buildTimeline() {
         expandBtn.style.display = branchingEnabled ? "" : "none";
         if (!branchingEnabled && timelineExpanded) {
             timelineExpanded = false;
+            localStorage.setItem("snapshotManager_timelineExpanded", "false");
             bar.classList.remove("snap-timeline-expanded");
             expandBtn.textContent = "\u25B4";
         }
