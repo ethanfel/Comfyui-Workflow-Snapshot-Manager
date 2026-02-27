@@ -2917,6 +2917,7 @@ async function buildSidebar(el) {
                     if (entry.workflowKey === currentKey) {
                         activeSnapshotId = null;
                         currentSnapshotId = null;
+                        activeBranchSelections.clear();
                     }
                     if (viewingWorkflowKey === entry.workflowKey) {
                         viewingWorkflowKey = null;
@@ -2996,6 +2997,13 @@ async function buildSidebar(el) {
         if (!confirmed) return;
         try {
             const { lockedCount } = await db_deleteAllForWorkflow(effKey);
+            // Clear stale in-memory state to prevent orphaned branches
+            lastCapturedIdMap.delete(effKey);
+            lastCapturedHashMap.delete(effKey);
+            lastGraphDataMap.delete(effKey);
+            activeSnapshotId = null;
+            currentSnapshotId = null;
+            activeBranchSelections.clear();
             pickerDirty = true;
             if (lockedCount > 0) {
                 showToast(`Cleared snapshots (${lockedCount} locked kept)`, "info");
