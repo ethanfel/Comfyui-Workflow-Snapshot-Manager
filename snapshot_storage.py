@@ -2,7 +2,7 @@
 Filesystem storage layer for workflow snapshots.
 
 Stores each snapshot as an individual JSON file under:
-    <extension_dir>/data/snapshots/<encoded_workflow_key>/<id>.json
+    <user_dir>/snapshot_manager/snapshots/<encoded_workflow_key>/<id>.json
 
 Workflow keys are percent-encoded for filesystem safety.
 
@@ -12,9 +12,22 @@ operations.  Only get_full_record() reads a file from disk after warm-up.
 
 import json
 import os
+import shutil
 import urllib.parse
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__), "data", "snapshots")
+# ─── Data directory resolution ───────────────────────────────────────
+# Prefer ComfyUI's persistent user directory; fall back to extension-local
+# paths when running outside ComfyUI (e.g. tests).
+
+_OLD_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+
+try:
+    import folder_paths
+    _USER_SM_DIR = os.path.join(folder_paths.get_user_directory(), "snapshot_manager")
+except Exception:
+    _USER_SM_DIR = os.path.join(os.path.dirname(__file__), "data")
+
+_DATA_DIR = os.path.join(_USER_SM_DIR, "snapshots")
 
 # ─── In-memory metadata cache ────────────────────────────────────────
 # Maps workflow_key -> list of metadata dicts (sorted by timestamp asc).
@@ -250,9 +263,9 @@ def prune(workflow_key, max_snapshots, source=None, protected_ids=None):
 
 
 # ─── Profile Storage ─────────────────────────────────────────────────
-# Profiles are stored as individual JSON files under data/profiles/<id>.json
+# Profiles are stored as individual JSON files under snapshot_manager/profiles/<id>.json
 
-_PROFILES_DIR = os.path.join(os.path.dirname(__file__), "data", "profiles")
+_PROFILES_DIR = os.path.join(_USER_SM_DIR, "profiles")
 _profile_cache = None  # list of profile dicts, or None if not loaded
 
 
@@ -340,3 +353,77 @@ def profile_update(profile_id, fields):
         json.dump(profile, f, separators=(",", ":"))
     _invalidate_profile_cache()
     return True
+
+
+# ─── Migration from old extension-local data ─────────────────────────
+
+def _migrate_old_data():
+    """Move data from the old <extension>/data/ location to the new user directory.
+
+    Only runs when the old directory exists, has content, and the new location
+    differs from the old one (i.e. we're actually inside ComfyUI).
+    """
+    old_snapshots = os.path.join(_OLD_DATA_DIR, "snapshots")
+    old_profiles = os.path.join(_OLD_DATA_DIR, "profiles")
+
+    # Nothing to migrate if old data dir doesn't exist or paths are the same
+    if os.path.normpath(_OLD_DATA_DIR) == os.path.normpath(_USER_SM_DIR):
+        return
+    if not os.path.isdir(_OLD_DATA_DIR):
+        return
+
+    migrated_anything = False
+
+    # Migrate snapshot workflow directories
+    if os.path.isdir(old_snapshots):
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        for name in os.listdir(old_snapshots):
+            src = os.path.join(old_snapshots, name)
+            dst = os.path.join(_DATA_DIR, name)
+            if not os.path.isdir(src):
+                continue
+            if os.path.exists(dst):
+                # Merge: move individual files that don't already exist
+                for fname in os.listdir(src):
+                    s = os.path.join(src, fname)
+                    d = os.path.join(dst, fname)
+                    if not os.path.exists(d):
+                        shutil.move(s, d)
+                # Remove source dir if now empty
+                try:
+                    os.rmdir(src)
+                except OSError:
+                    pass
+            else:
+                shutil.move(src, dst)
+            migrated_anything = True
+
+    # Migrate profile files
+    if os.path.isdir(old_profiles):
+        os.makedirs(_PROFILES_DIR, exist_ok=True)
+        for fname in os.listdir(old_profiles):
+            if not fname.endswith(".json"):
+                continue
+            src = os.path.join(old_profiles, fname)
+            dst = os.path.join(_PROFILES_DIR, fname)
+            if not os.path.exists(dst):
+                shutil.move(src, dst)
+            else:
+                os.remove(src)
+            migrated_anything = True
+
+    if migrated_anything:
+        # Clean up old directories if empty
+        for d in (old_snapshots, old_profiles, _OLD_DATA_DIR):
+            try:
+                if os.path.isdir(d) and not os.listdir(d):
+                    os.rmdir(d)
+            except OSError:
+                pass
+        print("[Snapshot Manager] Migrated data to", _USER_SM_DIR)
+
+
+try:
+    _migrate_old_data()
+except Exception as e:
+    print(f"[Snapshot Manager] Migration failed, old data preserved: {e}")
