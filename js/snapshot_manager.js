@@ -2111,8 +2111,8 @@ const CSS = `
 .snap-timeline {
     position: absolute;
     bottom: 4px;
-    left: 10%;
-    right: 10%;
+    left: 25%;
+    right: 25%;
     height: 38px;
     background: rgba(15, 23, 42, 0.85);
     border: 1px solid var(--border-color, #334155);
