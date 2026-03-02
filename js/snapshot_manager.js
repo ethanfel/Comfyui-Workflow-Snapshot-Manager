@@ -986,18 +986,22 @@ function getAncestorIds(snapshotId, parentOf) {
 
 function getAllBranches(tree) {
     const branches = [];
+    const visited = new Set();
     function walk(nodeId, path) {
+        if (visited.has(nodeId)) return; // cycle detection
+        visited.add(nodeId);
         const record = tree.byId.get(nodeId);
         if (!record) return;
-        const currentPath = [...path, record];
+        path.push(record);
         const children = tree.childrenOf.get(nodeId);
         if (!children || children.length === 0) {
-            branches.push(currentPath);
+            branches.push([...path]);
         } else {
             for (const child of children) {
-                walk(child.id, currentPath);
+                walk(child.id, path);
             }
         }
+        path.pop();
     }
     for (const root of tree.roots) {
         walk(root.id, []);
@@ -3720,9 +3724,14 @@ function buildTimeline() {
         return marker;
     }
 
+    let refreshPending = false;
     async function refresh() {
         if (!showTimeline) return;
-
+        if (refreshPending) return; // drop overlapping calls
+        refreshPending = true;
+        try { await _refreshInner(); } finally { refreshPending = false; }
+    }
+    async function _refreshInner() {
         const wfKey = getWorkflowKey();
 
         // Hide/show expand button based on branching
