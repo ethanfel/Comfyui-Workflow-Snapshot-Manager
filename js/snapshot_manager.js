@@ -3950,7 +3950,7 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                     if (value && timelineRefresh) timelineRefresh().catch(() => {});
                 },
             },
-            {
+            ...(BRANCHING_ENABLED ? [{
                 id: "SnapshotManager.branchingDefault",
                 name: "Enable branching by default",
                 type: "boolean",
@@ -3961,7 +3961,7 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                     if (sidebarRefresh) sidebarRefresh().catch(() => {});
                     if (timelineRefresh) timelineRefresh().catch(() => {});
                 },
-            },
+            }] : []),
         ],
 
         init() {
