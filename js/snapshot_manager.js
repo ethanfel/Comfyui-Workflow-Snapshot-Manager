@@ -1459,6 +1459,7 @@ async function _captureSnapshotInner(label) {
 
     const prevGraph = lastGraphDataMap.get(workflowKey);
     const changeType = detectChangeType(prevGraph, graphData);
+    if (changeType === "move") return false;
 
     // Determine parentId for branching
     let parentId = null;
