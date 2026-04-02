@@ -630,7 +630,8 @@ function computeCaptureMetaDiff(prevGraph, currGraph) {
     );
     if (paramChanged.length > 0)
         result.params = paramChanged.map(n => {
-            const count = (n.changes.widgetValues?.length ?? 0) + (n.changes.properties?.length ?? 0);
+            const wvCount = Array.isArray(n.changes.widgetValues) ? n.changes.widgetValues.length : (n.changes.widgetValues ? 1 : 0);
+            const count = wvCount + (n.changes.properties?.length ?? 0);
             return count > 0 ? `${n.title} (${count} value${count > 1 ? "s" : ""})` : n.title;
         });
     if (diff.addedLinks.length > 0 || diff.removedLinks.length > 0)
