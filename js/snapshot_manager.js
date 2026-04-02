@@ -615,6 +615,47 @@ function computeDetailedDiff(baseGraph, targetGraph) {
     };
 }
 
+// Compact diff stored in snapshot metadata for hover display
+function computeCaptureMetaDiff(prevGraph, currGraph) {
+    if (!prevGraph || !currGraph) return null;
+    const diff = computeDetailedDiff(prevGraph, currGraph);
+    const result = {};
+    if (diff.addedNodes.length > 0)
+        result.added = diff.addedNodes.map(n => n.title);
+    if (diff.removedNodes.length > 0)
+        result.removed = diff.removedNodes.map(n => n.title);
+    // Nodes with param/property changes (ignore pure position/size changes)
+    const paramChanged = diff.modifiedNodes.filter(n =>
+        n.changes.widgetValues || n.changes.properties || n.changes.title || n.changes.mode
+    );
+    if (paramChanged.length > 0)
+        result.params = paramChanged.map(n => {
+            const count = (n.changes.widgetValues?.length ?? 0) + (n.changes.properties?.length ?? 0);
+            return count > 0 ? `${n.title} (${count} value${count > 1 ? "s" : ""})` : n.title;
+        });
+    if (diff.addedLinks.length > 0 || diff.removedLinks.length > 0)
+        result.links = { added: diff.addedLinks.length, removed: diff.removedLinks.length };
+    return Object.keys(result).length > 0 ? result : null;
+}
+
+function formatCaptureDiffLines(captureDiff) {
+    if (!captureDiff) return [];
+    const lines = [];
+    if (captureDiff.added?.length)
+        lines.push(`+ ${captureDiff.added.join(", ")}`);
+    if (captureDiff.removed?.length)
+        lines.push(`− ${captureDiff.removed.join(", ")}`);
+    if (captureDiff.params?.length)
+        lines.push(`~ ${captureDiff.params.join(", ")}`);
+    if (captureDiff.links) {
+        const parts = [];
+        if (captureDiff.links.added) parts.push(`+${captureDiff.links.added} link${captureDiff.links.added > 1 ? "s" : ""}`);
+        if (captureDiff.links.removed) parts.push(`−${captureDiff.links.removed} link${captureDiff.links.removed > 1 ? "s" : ""}`);
+        if (parts.length) lines.push(parts.join(", "));
+    }
+    return lines;
+}
+
 // ─── SVG Graph Renderer ─────────────────────────────────────────────
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -1471,6 +1512,7 @@ async function _captureSnapshotInner(label) {
         }
     }
 
+    const captureDiff = computeCaptureMetaDiff(prevGraph, graphData);
     const record = {
         id: generateId(),
         workflowKey,
@@ -1481,6 +1523,7 @@ async function _captureSnapshotInner(label) {
         locked: false,
         changeType,
         parentId,
+        ...(captureDiff ? { captureDiff } : {}),
     };
 
     try {
@@ -1550,6 +1593,7 @@ async function captureNodeSnapshot(label = "Node Trigger", thumbnail = null) {
         }
     }
 
+    const captureDiff = computeCaptureMetaDiff(prevGraph, graphData);
     const record = {
         id: generateId(),
         workflowKey,
@@ -1561,6 +1605,7 @@ async function captureNodeSnapshot(label = "Node Trigger", thumbnail = null) {
         source: "node",
         changeType,
         parentId,
+        ...(captureDiff ? { captureDiff } : {}),
         ...(thumbnail ? { thumbnail } : {}),
     };
 
