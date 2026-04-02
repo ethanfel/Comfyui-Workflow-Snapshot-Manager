@@ -3640,6 +3640,14 @@ async function buildSidebar(el) {
                         if (!svg) return;
                         tooltip.appendChild(svg);
                     }
+                    // Diff summary lines
+                    const diffLines = formatCaptureDiffLines(rec.captureDiff);
+                    if (diffLines.length > 0) {
+                        const diffEl = document.createElement("div");
+                        diffEl.style.cssText = "margin-top:6px;font-size:11px;line-height:1.5;color:#ccc;white-space:pre;";
+                        diffEl.textContent = diffLines.join("\n");
+                        tooltip.appendChild(diffEl);
+                    }
                     const rect = item.getBoundingClientRect();
                     let left = rect.right + 8;
                     let top = rect.top;
