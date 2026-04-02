@@ -2895,7 +2895,7 @@ async function buildSidebar(el) {
 
     const branchToggleBtn = document.createElement("button");
     branchToggleBtn.className = "snap-filter-auto-btn" + (isBranchingEnabled() ? " active" : "");
-    branchToggleBtn.style.display = "none";
+    branchToggleBtn.style.display = BRANCHING_ENABLED ? "" : "none";
     branchToggleBtn.textContent = "Branch";
     branchToggleBtn.title = "Toggle snapshot branching";
     branchToggleBtn.addEventListener("click", async () => {
@@ -3653,7 +3653,7 @@ async function buildSidebar(el) {
                     let top = rect.top;
                     // Clamp to viewport
                     if (left + 260 > window.innerWidth) left = rect.left - 260;
-                    if (top + 200 > window.innerHeight) top = window.innerHeight - 200;
+                    if (top + 280 > window.innerHeight) top = window.innerHeight - 280;
                     if (top < 0) top = 0;
                     tooltip.style.left = `${left}px`;
                     tooltip.style.top = `${top}px`;
