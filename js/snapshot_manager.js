@@ -24,6 +24,7 @@ let autoCaptureEnabled = true;
 let captureOnLoad = true;
 let maxNodeSnapshots = 5;
 let showTimeline = false;
+const BRANCHING_ENABLED = false;
 let branchingDefault = true; // updated by ComfyUI settings onChange
 
 // ─── State ───────────────────────────────────────────────────────────
@@ -348,6 +349,7 @@ function getEffectiveWorkflowKey() {
 }
 
 function isBranchingEnabled(wk) {
+    if (!BRANCHING_ENABLED) return false;
     if (!wk) wk = getEffectiveWorkflowKey();
     if (workflowBranchOverrides.has(wk)) return workflowBranchOverrides.get(wk);
     return branchingDefault;
@@ -2846,6 +2848,7 @@ async function buildSidebar(el) {
 
     const branchToggleBtn = document.createElement("button");
     branchToggleBtn.className = "snap-filter-auto-btn" + (isBranchingEnabled() ? " active" : "");
+    branchToggleBtn.style.display = "none";
     branchToggleBtn.textContent = "Branch";
     branchToggleBtn.title = "Toggle snapshot branching";
     branchToggleBtn.addEventListener("click", async () => {
