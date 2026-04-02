@@ -3771,6 +3771,8 @@ function buildTimeline() {
         if (isLatest) marker.classList.add("snap-timeline-marker-latest");
 
         let tip = `${rec.label} — ${formatTime(rec.timestamp)}\n${iconInfo.label}`;
+        const diffLines = formatCaptureDiffLines(rec.captureDiff);
+        if (diffLines.length > 0) tip += `\n${diffLines.join("\n")}`;
         if (rec.notes) tip += `\n${rec.notes}`;
         marker.title = tip;
 
