@@ -13,6 +13,8 @@ operations.  Only get_full_record() reads a file from disk after warm-up.
 import json
 import os
 import shutil
+import tempfile
+import time
 import urllib.parse
 
 # ─── Data directory resolution ───────────────────────────────────────
@@ -37,8 +39,15 @@ _cache_warmed = set()  # workflow keys already loaded from disk
 
 
 def _extract_meta(record):
-    """Return a lightweight copy of *record* without graphData."""
-    return {k: v for k, v in record.items() if k != "graphData"}
+    """Return a lightweight copy of *record* without graphData or thumbnail.
+
+    The (potentially large, base64) thumbnail is replaced by a boolean
+    ``hasThumbnail`` flag; clients lazy-load the image via get_full_record.
+    """
+    meta = {k: v for k, v in record.items() if k not in ("graphData", "thumbnail")}
+    if record.get("thumbnail"):
+        meta["hasThumbnail"] = True
+    return meta
 
 
 def _ensure_cached(workflow_key):
@@ -65,13 +74,42 @@ def _ensure_cached(workflow_key):
 # ─── Helpers ─────────────────────────────────────────────────────────
 
 def _workflow_dir(workflow_key):
+    if not workflow_key or not isinstance(workflow_key, str):
+        raise ValueError(f"Invalid workflow key: {workflow_key!r}")
     encoded = urllib.parse.quote(workflow_key, safe="")
-    return os.path.join(_DATA_DIR, encoded)
+    path = os.path.normpath(os.path.join(_DATA_DIR, encoded))
+    # Defense in depth: urllib.parse.quote() leaves "." and ".." unescaped, so a
+    # key like ".." would escape the snapshots root (the "/" in "../.." *is*
+    # escaped, so escapes are bounded to one level — but block it anyway).
+    # Require the resolved directory to be a direct child of _DATA_DIR.
+    if os.path.dirname(path) != os.path.normpath(_DATA_DIR):
+        raise ValueError(f"Invalid workflow key: {workflow_key!r}")
+    return path
 
 
 def _validate_id(snapshot_id):
     if not snapshot_id or "/" in snapshot_id or "\\" in snapshot_id or ".." in snapshot_id:
         raise ValueError(f"Invalid snapshot id: {snapshot_id!r}")
+
+
+def _atomic_write_json(path, obj):
+    """Write *obj* as JSON to *path* atomically (temp file + os.replace).
+
+    Prevents a crash or concurrent reader mid-write from observing a
+    truncated/corrupt file (the old in-place open("w") truncated first).
+    """
+    directory = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, separators=(",", ":"))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ─── Public API ──────────────────────────────────────────────────────
@@ -84,8 +122,7 @@ def put(record):
     d = _workflow_dir(workflow_key)
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, f"{snapshot_id}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(record, f, separators=(",", ":"))
+    _atomic_write_json(path, record)
 
     # Update cache only if already warmed; otherwise _ensure_cached will
     # pick up the new file from disk on next read.
@@ -132,8 +169,7 @@ def update_meta(workflow_key, snapshot_id, fields):
             record.pop(k, None)
         else:
             record[k] = v
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(record, f, separators=(",", ":"))
+    _atomic_write_json(path, record)
     # Update cache entry
     for entry in _cache.get(workflow_key, []):
         if entry.get("id") == snapshot_id:
@@ -207,7 +243,10 @@ def get_all_workflow_keys():
         if not os.path.isdir(subdir):
             continue
         workflow_key = urllib.parse.unquote(encoded_name)
-        entries = _ensure_cached(workflow_key)
+        try:
+            entries = _ensure_cached(workflow_key)
+        except ValueError:
+            continue  # skip stray/legacy dirs whose name is not a valid key
         if not entries:
             continue
         results.append({"workflowKey": workflow_key, "count": len(entries)})
@@ -215,7 +254,55 @@ def get_all_workflow_keys():
     return results
 
 
-def prune(workflow_key, max_snapshots, source=None, protected_ids=None):
+def get_storage_usage():
+    """Return {totalBytes, workflows: [{workflowKey, bytes, count}]} for all snapshots."""
+    workflows = []
+    total = 0
+    if os.path.isdir(_DATA_DIR):
+        for encoded_name in os.listdir(_DATA_DIR):
+            subdir = os.path.join(_DATA_DIR, encoded_name)
+            if not os.path.isdir(subdir):
+                continue
+            size = 0
+            count = 0
+            for fname in os.listdir(subdir):
+                if not fname.endswith(".json"):
+                    continue
+                try:
+                    size += os.path.getsize(os.path.join(subdir, fname))
+                    count += 1
+                except OSError:
+                    continue
+            if count == 0:
+                continue
+            total += size
+            workflows.append({
+                "workflowKey": urllib.parse.unquote(encoded_name),
+                "bytes": size,
+                "count": count,
+            })
+    workflows.sort(key=lambda w: w["bytes"], reverse=True)
+    return {"totalBytes": total, "workflows": workflows}
+
+
+def get_full_records_for_workflow(workflow_key):
+    """Return all full snapshot records (with graphData) for a workflow, for export."""
+    d = _workflow_dir(workflow_key)
+    records = []
+    if os.path.isdir(d):
+        for fname in os.listdir(d):
+            if not fname.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(d, fname), "r", encoding="utf-8") as f:
+                    records.append(json.load(f))
+            except (json.JSONDecodeError, OSError):
+                continue
+    records.sort(key=lambda r: r.get("timestamp", 0))
+    return records
+
+
+def prune(workflow_key, max_snapshots, source=None, protected_ids=None, max_age_days=None):
     """Delete oldest unlocked snapshots beyond limit. Returns count deleted.
 
     source filtering:
@@ -225,6 +312,9 @@ def prune(workflow_key, max_snapshots, source=None, protected_ids=None):
 
     protected_ids: set/list of snapshot IDs that must not be pruned
       (e.g. ancestors of active branch tip, fork-point snapshots).
+
+    max_age_days: when > 0, also delete unlocked/unprotected snapshots older
+      than this many days, regardless of the count limit.
     """
     _protected = set(protected_ids) if protected_ids else set()
     entries = _ensure_cached(workflow_key)
@@ -234,9 +324,23 @@ def prune(workflow_key, max_snapshots, source=None, protected_ids=None):
         candidates = [r for r in entries if not r.get("locked") and r.get("source") != "node" and r.get("id") not in _protected]
     else:
         candidates = [r for r in entries if not r.get("locked") and r.get("id") not in _protected]
-    if len(candidates) <= max_snapshots:
+    delete_ids = set()
+    to_delete = []
+    # Oldest-beyond-count get deleted...
+    if len(candidates) > max_snapshots:
+        for rec in candidates[: len(candidates) - max_snapshots]:
+            to_delete.append(rec)
+            delete_ids.add(rec["id"])
+    # ...as do any candidates older than the age cutoff (locked/protected
+    # snapshots were already excluded from candidates above).
+    if max_age_days and max_age_days > 0:
+        cutoff = time.time() * 1000 - max_age_days * 86400000
+        for rec in candidates:
+            if rec["id"] not in delete_ids and rec.get("timestamp", 0) < cutoff:
+                to_delete.append(rec)
+                delete_ids.add(rec["id"])
+    if not to_delete:
         return 0
-    to_delete = candidates[: len(candidates) - max_snapshots]
     d = _workflow_dir(workflow_key)
     deleted = 0
     delete_ids = set()
@@ -304,8 +408,7 @@ def profile_put(profile):
     _validate_id(pid)
     _ensure_profiles_dir()
     path = os.path.join(_PROFILES_DIR, f"{pid}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(profile, f, separators=(",", ":"))
+    _atomic_write_json(path, profile)
     _invalidate_profile_cache()
 
 
@@ -349,8 +452,7 @@ def profile_update(profile_id, fields):
             profile.pop(k, None)
         else:
             profile[k] = v
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(profile, f, separators=(",", ":"))
+    _atomic_write_json(path, profile)
     _invalidate_profile_cache()
     return True
 

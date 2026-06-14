@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://registry.comfy.org/publishers/ethanfel/nodes/comfyui-snapshot-manager"><img src="https://img.shields.io/badge/ComfyUI-Registry-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMyA3djEwbDkgNSA5LTVWN2wtOS01eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=" alt="ComfyUI Registry"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"/></a>
-  <img src="https://img.shields.io/badge/version-3.0.0-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-3.0.1-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/ComfyUI-Extension-purple" alt="ComfyUI Extension"/>
 </p>
 
@@ -20,8 +20,9 @@
 ## Features
 
 - **Auto-capture** — Snapshots are saved automatically as you edit, with configurable debounce
-- **Custom naming** — Name your snapshots when taking them manually ("Before merge", "Working v2", etc.)
-- **Search & filter** — Quickly find snapshots by name with the filter bar
+- **Custom naming** — Name your snapshots when taking them manually ("Before merge", "Working v2", etc.); double-click a snapshot's name in the sidebar to rename it later
+- **Notes** — Attach a freeform note to any snapshot with the note (pencil) button; notes are searchable from the filter bar
+- **Search & filter** — Quickly find snapshots by name or note with the filter bar
 - **Restore or Swap** — Open a snapshot as a new workflow, or replace the current one in-place
 - **Workflow browser** — Browse and recover snapshots from any workflow, including renamed or deleted ones
 - **Per-workflow storage** — Each workflow has its own independent snapshot history
@@ -35,9 +36,12 @@
 - **Ctrl+S shortcut** — Press Ctrl+S (or Cmd+S on Mac) to take a manual snapshot alongside ComfyUI's own save
 - **SVG graph previews** — Hover any snapshot for a tooltip preview of the workflow graph; click the eye button for a full-size modal; diff view now shows side-by-side SVG comparison with color-coded highlights (green = added, red = removed, amber = modified)
 - **Diff view** — Compare any snapshot against the current workflow (one click) or two snapshots against each other (Shift+click to set base); see added/removed/modified nodes, widget value changes, and rewired connections in a single modal
-- **Snapshot branching** — Swap to an old snapshot and edit to fork into a new branch; navigate between branches with `< 1/3 >` arrows at fork points in the sidebar and timeline, like ChatGPT conversation branching
 - **Profile manager** — Save and load named sets of workflows as session profiles (like browser tab groups); profiles track which workflows you visited and restore the latest snapshot for each
 - **Hide auto-saves** — Toggle button next to the search bar hides auto-save snapshots to reduce clutter while keeping manual, locked, and node-triggered snapshots visible
+- **Pause auto-capture** — Toggle automatic capture on/off for the session without leaving the panel (Auto: On/Off button in the filter row)
+- **Export / Import** — Download a workflow's full snapshot history as a JSON file and re-import it on another machine or server
+- **Storage usage** — The sidebar footer shows total snapshot storage used on the server across all workflows
+- **Retention by age** — Optionally auto-delete snapshots older than a configurable number of days (off by default), alongside the per-workflow count limit
 - **Lock/pin snapshots** — Protect important snapshots from auto-pruning and "Clear All" with a single click
 - **Concurrency-safe** — Lock guard prevents double-click issues during restore
 - **Server-side storage** — Snapshots persist on the ComfyUI server's filesystem, accessible from any browser
@@ -178,32 +182,13 @@ Visually inspect any snapshot without restoring or swapping it.
 
 The SVG renderer draws nodes with their stored position, size, and colors. Links are rendered as bezier curves colored by type (blue for IMAGE, orange for CLIP, purple for MODEL, etc.). Collapsed nodes appear as thin title-only strips. Thumbnails (hover tooltips) auto-simplify by hiding labels and slot dots for clarity at small sizes.
 
-### 14. Snapshot Branching
-
-Branching lets you explore multiple variations of a workflow without losing any history — similar to conversation branching in ChatGPT.
-
-**How it works:**
-
-1. Work normally — snapshots chain linearly as you edit
-2. **Swap** to an older snapshot and start editing — the next auto-capture forks into a new branch from that point
-3. A **`< 1/2 >`** branch navigator appears at every fork point in the sidebar and the timeline
-4. Click the arrows to switch between branches — the sidebar and timeline update together
-
-**Details:**
-
-- Each snapshot stores a `parentId` linking it to its predecessor, forming a tree
-- Legacy snapshots (from before branching) are automatically chained by timestamp for backwards compatibility
-- **Pruning is branch-safe** — ancestors of the current branch tip and fork-point snapshots are never auto-pruned
-- **Deleting a fork point** re-parents its children to the deleted snapshot's parent (with a confirmation dialog)
-- Switching workflows clears branch navigation state
-
-### 15. Hide Auto-saves
+### 14. Hide Auto-saves
 
 Click the **Hide Auto** button next to the search bar to hide all auto-save snapshots ("Auto" and "Initial"). The button turns blue and switches to **Show Auto** when active.
 
-The filter works together with text search — both are applied simultaneously. Branch navigators remain visible regardless of the filter. Manual, locked, node-triggered, and "Current" snapshots are always shown.
+The filter works together with text search — both are applied simultaneously. Manual, locked, node-triggered, and "Current" snapshots are always shown.
 
-### 16. Session Profiles
+### 15. Session Profiles
 
 Save and load named sets of workflows — like browser tab groups for ComfyUI.
 
@@ -251,7 +236,7 @@ All settings are available in **ComfyUI Settings > Snapshot Manager**:
 2. A **debounce timer** prevents excessive writes
 3. The workflow is serialized and **hash-checked** against the last capture (per-workflow) to avoid duplicates
 4. The previous graph state is diffed against the current to **detect the change type** (node add/remove, connection, parameter, move, or mixed) — stored as a `changeType` field on the record
-5. New snapshots are sent to the **server** and stored as individual JSON files under `data/snapshots/`
+5. New snapshots are sent to the **server** and stored as individual JSON files under `<user_dir>/snapshot_manager/snapshots/`
 6. The **sidebar panel** and **timeline bar** fetch snapshots from the server and render them with change-type icons
 7. **Restore/Swap** loads graph data back into ComfyUI with a lock guard to prevent concurrent operations, and updates the graph cache so the next diff is accurate
 
@@ -270,26 +255,25 @@ All settings are available in **ComfyUI Settings > Snapshot Manager**:
 4. The **timeline** updates: the swapped-to snapshot gets a white ring (active), the auto-saved snapshot gets a green dot (current)
 5. Clicking the green dot swaps back; editing the graph clears both markers (the next auto-capture supersedes them)
 
-**Branching:**
+**Branching** (implemented but disabled in the current release — the code remains for a future enable):
 
 1. Each snapshot stores a `parentId` pointing to its predecessor
 2. `buildSnapshotTree()` constructs parent/child maps from all records — legacy snapshots (no `parentId`) are chained by timestamp automatically
 3. `getDisplayPath()` walks the tree from root to tip, following `activeBranchSelections` at each fork point, producing the linear branch view
-4. The sidebar and timeline render only the current branch; `< 1/3 >` navigators at fork points switch between branches
-5. **Pruning protection**: before pruning, `getAncestorIds()` collects all ancestors of the branch tip; these IDs plus fork-point IDs are sent as `protectedIds` to the server
+4. **Pruning protection**: before pruning, `getAncestorIds()` collects all ancestors of the branch tip; these IDs plus fork-point IDs are sent as `protectedIds` to the server
 
 **Profiles:**
 
 1. Session tracking records each visited workflow key with timestamps
-2. **Save** creates a JSON file at `<extension_dir>/data/profiles/<id>.json` with the workflow list and active workflow
+2. **Save** creates a JSON file at `<user_dir>/snapshot_manager/profiles/<id>.json` with the workflow list and active workflow
 3. **Load** fetches the latest snapshot for each workflow in the profile and calls `loadGraphData`
 
-**Storage:** Snapshots are stored as JSON files on the server at `<extension_dir>/data/snapshots/<workflow_key>/<id>.json`. Profiles are stored at `<extension_dir>/data/profiles/<id>.json`. Both persist across browser sessions, ComfyUI restarts, and are accessible from any browser connecting to the same server.
+**Storage:** Snapshots are stored as JSON files on the server in ComfyUI's user directory at `<user_dir>/snapshot_manager/snapshots/<workflow_key>/<id>.json`. Profiles are stored at `<user_dir>/snapshot_manager/profiles/<id>.json`. Data from older versions (kept under the extension's own `data/` folder) is migrated here automatically on first load. Both persist across browser sessions, ComfyUI restarts, and are accessible from any browser connecting to the same server.
 
 ## FAQ
 
 **Where are snapshots stored?**
-On the server's filesystem under `<extension_dir>/data/snapshots/`. Each workflow gets its own directory, and each snapshot is an individual JSON file. They persist across browser sessions and are accessible from any browser connecting to the same ComfyUI server.
+On the server's filesystem in ComfyUI's user directory under `snapshot_manager/snapshots/`. Each workflow gets its own directory, and each snapshot is an individual JSON file. They persist across browser sessions and are accessible from any browser connecting to the same ComfyUI server.
 
 **I'm upgrading from v1.x — what happens to my existing snapshots?**
 On first load after upgrading, the extension automatically migrates all snapshots from your browser's IndexedDB to the server. Once migration succeeds, the old IndexedDB database is deleted. If migration fails (e.g., server unreachable), your old data is preserved and migration will retry on the next load.
@@ -302,12 +286,6 @@ Each workflow has its own snapshot history. Switching workflows cancels any pend
 
 **I renamed/deleted a workflow — are my snapshots gone?**
 No. Snapshots are keyed by the workflow name at capture time. Use the workflow picker to find and restore them under the old name.
-
-**How does branching work?**
-When you swap to an old snapshot and then edit, the next capture forks into a new branch. A `< 1/2 >` navigator appears at the fork point — click the arrows to switch branches. The tree structure is computed from `parentId` links on each snapshot. Old snapshots without `parentId` (from before v3.0) are automatically chained by timestamp.
-
-**Can I delete a fork-point snapshot?**
-Yes. The extension re-parents its children to the deleted snapshot's parent, preserving the branch structure. A confirmation dialog warns you first.
 
 **What are profiles?**
 Profiles save a list of workflows you've visited in a session. Loading a profile restores the latest snapshot for each workflow. They're useful for switching between project contexts — like browser tab groups.

@@ -23,6 +23,7 @@ let debounceMs = 3000;
 let autoCaptureEnabled = true;
 let captureOnLoad = true;
 let maxNodeSnapshots = 5;
+let maxAgeDays = 0; // 0 = never age-prune
 let showTimeline = false;
 const BRANCHING_ENABLED = false;
 let branchingDefault = true; // updated by ComfyUI settings onChange
@@ -56,6 +57,18 @@ const sessionWorkflows = new Map(); // workflowKey -> { firstSeen, lastSeen }
 
 // ─── Server API Layer ───────────────────────────────────────────────
 
+async function _respError(resp) {
+    // Build an Error from a non-OK response, tolerating non-JSON bodies (proxy
+    // 502s, HTML error pages) that would otherwise throw on resp.json() and mask
+    // the real status.
+    let detail = resp.statusText || `HTTP ${resp.status}`;
+    try {
+        const err = await resp.json();
+        if (err && err.error) detail = err.error;
+    } catch {}
+    return new Error(detail);
+}
+
 async function db_put(record) {
     try {
         const resp = await api.fetchApi("/snapshot-manager/save", {
@@ -64,8 +77,7 @@ async function db_put(record) {
             body: JSON.stringify({ record }),
         });
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Save failed:`, err);
@@ -82,8 +94,7 @@ async function db_getAllForWorkflow(workflowKey) {
             body: JSON.stringify({ workflowKey }),
         });
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
         return await resp.json();
     } catch (err) {
@@ -101,8 +112,7 @@ async function db_delete(workflowKey, id) {
             body: JSON.stringify({ workflowKey, id }),
         });
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Delete failed:`, err);
@@ -118,8 +128,7 @@ async function db_deleteAllForWorkflow(workflowKey) {
             body: JSON.stringify({ workflowKey }),
         });
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
         return await resp.json();
     } catch (err) {
@@ -133,8 +142,7 @@ async function db_getAllWorkflowKeys() {
     try {
         const resp = await api.fetchApi("/snapshot-manager/workflows");
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
         return await resp.json();
     } catch (err) {
@@ -151,8 +159,7 @@ async function db_updateMeta(workflowKey, id, fields) {
             body: JSON.stringify({ workflowKey, id, fields }),
         });
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Update meta failed:`, err);
@@ -175,16 +182,46 @@ async function db_getFullRecord(workflowKey, id) {
     }
 }
 
+async function db_getStorageUsage() {
+    try {
+        const resp = await api.fetchApi("/snapshot-manager/usage");
+        if (!resp.ok) throw await _respError(resp);
+        return await resp.json();
+    } catch (err) {
+        console.warn(`[${EXTENSION_NAME}] Usage scan failed:`, err);
+        return null;
+    }
+}
+
+async function db_exportWorkflow(workflowKey) {
+    const resp = await api.fetchApi("/snapshot-manager/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflowKey }),
+    });
+    if (!resp.ok) throw await _respError(resp);
+    return await resp.json();
+}
+
+async function db_importRecords(records) {
+    const resp = await api.fetchApi("/snapshot-manager/migrate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ records }),
+    });
+    if (!resp.ok) throw await _respError(resp);
+    return await resp.json();
+}
+
 async function pruneSnapshots(workflowKey, protectedIds = []) {
     try {
         const resp = await api.fetchApi("/snapshot-manager/prune", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workflowKey, maxSnapshots, source: "regular", protectedIds }),
+            body: JSON.stringify({ workflowKey, maxSnapshots, source: "regular", protectedIds, maxAgeDays }),
         });
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Prune failed:`, err);
@@ -196,11 +233,10 @@ async function pruneNodeSnapshots(workflowKey, protectedIds = []) {
         const resp = await api.fetchApi("/snapshot-manager/prune", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workflowKey, maxSnapshots: maxNodeSnapshots, source: "node", protectedIds }),
+            body: JSON.stringify({ workflowKey, maxSnapshots: maxNodeSnapshots, source: "node", protectedIds, maxAgeDays }),
         });
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Node prune failed:`, err);
@@ -217,8 +253,7 @@ async function profile_save(profile) {
             body: JSON.stringify({ profile }),
         });
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Profile save failed:`, err);
@@ -231,8 +266,7 @@ async function profile_list() {
     try {
         const resp = await api.fetchApi("/snapshot-manager/profile/list");
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
         return await resp.json();
     } catch (err) {
@@ -249,8 +283,7 @@ async function profile_delete(profileId) {
             body: JSON.stringify({ id: profileId }),
         });
         if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || resp.statusText);
+            throw await _respError(resp);
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Profile delete failed:`, err);
@@ -333,6 +366,51 @@ function quickHash(str) {
         hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
     }
     return hash;
+}
+
+// Bound the in-memory previous-graph copies (used for change-type detection and
+// diff summaries). One full graph per workflow can be large, so keep an LRU of
+// the few most-recently-touched workflows instead of growing without limit.
+const MAX_GRAPH_CACHE = 5;
+function setLastGraphData(workflowKey, graphData) {
+    lastGraphDataMap.delete(workflowKey); // re-insert to mark most-recently-used
+    lastGraphDataMap.set(workflowKey, graphData);
+    while (lastGraphDataMap.size > MAX_GRAPH_CACHE) {
+        const oldest = lastGraphDataMap.keys().next().value;
+        lastGraphDataMap.delete(oldest);
+    }
+}
+
+// SVG previews are immutable per snapshot, so the cache can persist across
+// refreshes. Drop entries for snapshots that no longer exist and cap the size,
+// instead of clearing the whole cache on every refresh.
+const MAX_SVG_CACHE = 80;
+function pruneSvgCache(records) {
+    const liveIds = new Set(records.map((r) => r.id));
+    for (const key of [...svgCache.keys()]) {
+        const id = key.slice(0, key.lastIndexOf(":"));
+        if (!liveIds.has(id)) svgCache.delete(key);
+    }
+    while (svgCache.size > MAX_SVG_CACHE) {
+        const oldest = svgCache.keys().next().value;
+        svgCache.delete(oldest);
+    }
+}
+
+// Thumbnails are no longer embedded in /list metadata (only a hasThumbnail
+// flag), so lazy-load and cache the base64 image per snapshot on first use.
+const thumbnailCache = new Map(); // snapshotId -> dataURL string or null
+async function getThumbnailDataUrl(rec) {
+    if (rec.thumbnail) return `data:image/jpeg;base64,${rec.thumbnail}`;
+    if (!rec.hasThumbnail) return null;
+    if (thumbnailCache.has(rec.id)) return thumbnailCache.get(rec.id);
+    let url = null;
+    try {
+        const full = await db_getFullRecord(rec.workflowKey, rec.id);
+        if (full && full.thumbnail) url = `data:image/jpeg;base64,${full.thumbnail}`;
+    } catch {}
+    thumbnailCache.set(rec.id, url);
+    return url;
 }
 
 function getWorkflowKey() {
@@ -1007,11 +1085,14 @@ function getDisplayPath(tree, branchSelections) {
     if (!current) return [];
 
     const path = [current];
+    const visited = new Set([current.id]);
     while (true) {
         const children = childrenOf.get(current.id);
         if (!children || children.length === 0) break;
         const selectedIndex = branchSelections.get(current.id) ?? 0;
         current = children[Math.min(selectedIndex, children.length - 1)];
+        if (visited.has(current.id)) break; // safety: cycle detection (parity with getAllBranches)
+        visited.add(current.id);
         path.push(current);
     }
     return path;
@@ -1087,7 +1168,10 @@ function selectBranchContaining(snapshotId, tree) {
 // ─── Restore Lock ───────────────────────────────────────────────────
 
 async function withRestoreLock(fn) {
-    if (restoreLock) return;
+    if (restoreLock) {
+        showToast("Please wait for the current operation to finish", "warn");
+        return;
+    }
     let resolve;
     restoreLock = new Promise((r) => { resolve = r; });
     try {
@@ -1135,6 +1219,7 @@ async function showPromptDialog(message, defaultValue = "Manual") {
         const result = await app.extensionManager.dialog.prompt({
             title: "Snapshot Name",
             message,
+            defaultValue,
         });
         return result;
     } catch {
@@ -1483,10 +1568,10 @@ async function captureSnapshot(label = "Auto") {
     if (restoreLock) return false;
     if (captureInProgress) return false;
     captureInProgress = true;
-    try { return await _captureSnapshotInner(label); } finally { captureInProgress = false; }
+    try { return await _captureCore({ label, dedupe: true, skipMove: true }); } finally { captureInProgress = false; }
 }
 
-async function _captureSnapshotInner(label) {
+async function _captureCore({ label, source = null, thumbnail = null, dedupe = false, skipMove = false }) {
 
     const graphData = getGraphData();
     if (!graphData) return false;
@@ -1497,11 +1582,11 @@ async function _captureSnapshotInner(label) {
     const workflowKey = getWorkflowKey();
     const serialized = JSON.stringify(graphData);
     const hash = quickHash(serialized);
-    if (hash === lastCapturedHashMap.get(workflowKey)) return false;
+    if (dedupe && hash === lastCapturedHashMap.get(workflowKey)) return false;
 
     const prevGraph = lastGraphDataMap.get(workflowKey);
     const changeType = detectChangeType(prevGraph, graphData);
-    if (changeType === "move") return false;
+    if (skipMove && changeType === "move") return false;
 
     // Determine parentId for branching
     let parentId = null;
@@ -1524,9 +1609,12 @@ async function _captureSnapshotInner(label) {
         locked: false,
         changeType,
         parentId,
+        ...(source ? { source } : {}),
         ...(captureDiff ? { captureDiff } : {}),
+        ...(thumbnail ? { thumbnail } : {}),
     };
 
+    const pruneFn = source === "node" ? pruneNodeSnapshots : pruneSnapshots;
     try {
         await db_put(record);
         if (isBranchingEnabled(workflowKey)) {
@@ -1547,16 +1635,16 @@ async function _captureSnapshotInner(label) {
                 }
             }
             protectedIds.add(record.id); // protect the just-captured snapshot
-            await pruneSnapshots(workflowKey, [...protectedIds]);
+            await pruneFn(workflowKey, [...protectedIds]);
         } else {
-            await pruneSnapshots(workflowKey);
+            await pruneFn(workflowKey);
         }
     } catch {
         return false;
     }
 
     lastCapturedHashMap.set(workflowKey, hash);
-    lastGraphDataMap.set(workflowKey, graphData);
+    setLastGraphData(workflowKey, graphData);
     lastCapturedIdMap.set(workflowKey, record.id);
     pickerDirty = true;
     currentSnapshotId = null;  // new capture supersedes "current" bookmark
@@ -1573,82 +1661,11 @@ async function _captureSnapshotInner(label) {
 
 async function captureNodeSnapshot(label = "Node Trigger", thumbnail = null) {
     if (restoreLock) return false;
-
-    const graphData = getGraphData();
-    if (!graphData) return false;
-
-    const nodes = graphData.nodes || [];
-    if (nodes.length === 0) return false;
-
-    const workflowKey = getWorkflowKey();
-    const prevGraph = lastGraphDataMap.get(workflowKey);
-    const changeType = detectChangeType(prevGraph, graphData);
-
-    // Determine parentId for branching
-    let parentId = null;
-    if (isBranchingEnabled(workflowKey)) {
-        if (activeSnapshotId) {
-            parentId = activeSnapshotId;
-        } else if (lastCapturedIdMap.has(workflowKey)) {
-            parentId = lastCapturedIdMap.get(workflowKey);
-        }
-    }
-
-    const captureDiff = computeCaptureMetaDiff(prevGraph, graphData);
-    const record = {
-        id: generateId(),
-        workflowKey,
-        timestamp: Date.now(),
-        label,
-        nodeCount: nodes.length,
-        graphData,
-        locked: false,
-        source: "node",
-        changeType,
-        parentId,
-        ...(captureDiff ? { captureDiff } : {}),
-        ...(thumbnail ? { thumbnail } : {}),
-    };
-
-    try {
-        await db_put(record);
-        if (isBranchingEnabled(workflowKey)) {
-            // Compute protected IDs: ancestors + fork points + ancestors of locked snapshots
-            const allRecs = await db_getAllForWorkflow(workflowKey);
-            const tempTree = buildSnapshotTree(allRecs);
-            const protectedNodeIds = getAncestorIds(record.id, tempTree.parentOf);
-            for (const [pid, children] of tempTree.childrenOf) {
-                if (children.length > 1) protectedNodeIds.add(pid);
-            }
-            for (const rec of allRecs) {
-                if (rec.locked) {
-                    for (const aid of getAncestorIds(rec.id, tempTree.parentOf)) {
-                        protectedNodeIds.add(aid);
-                    }
-                }
-            }
-            protectedNodeIds.add(record.id);
-            await pruneNodeSnapshots(workflowKey, [...protectedNodeIds]);
-        } else {
-            await pruneNodeSnapshots(workflowKey);
-        }
-    } catch {
-        return false;
-    }
-
-    lastGraphDataMap.set(workflowKey, graphData);
-    lastCapturedIdMap.set(workflowKey, record.id);
-    pickerDirty = true;
-    currentSnapshotId = null;
-    activeSnapshotId = null;
-
-    if (sidebarRefresh) {
-        sidebarRefresh().catch(() => {});
-    }
-    if (timelineRefresh) {
-        timelineRefresh().catch(() => {});
-    }
-    return true;
+    // Node-triggered captures are never deduped or move-skipped (an explicit
+    // node trigger should always produce a snapshot), but they share the same
+    // core so the in-memory hash/id state stays consistent afterwards (fixes
+    // the duplicate-auto-snapshot-after-node-capture bug).
+    return await _captureCore({ label, source: "node", thumbnail });
 }
 
 function scheduleCaptureSnapshot() {
@@ -1671,6 +1688,9 @@ async function restoreSnapshot(record) {
         if (!full) { showToast("Failed to load snapshot data", "error"); return; }
         record = full;
     }
+    // Preserve any unsaved live edits before replacing the canvas (parity with
+    // swap). Deduped by hash, so it's a no-op when there is nothing new to save.
+    await captureSnapshot("Current").catch(() => {});
     await withRestoreLock(async () => {
         if (!validateSnapshotData(record.graphData)) {
             showToast("Invalid snapshot data", "error");
@@ -1680,7 +1700,7 @@ async function restoreSnapshot(record) {
             await app.loadGraphData(record.graphData, true, true);
             const wfKey = getWorkflowKey();
             lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(record.graphData)));
-            lastGraphDataMap.set(wfKey, record.graphData);
+            setLastGraphData(wfKey, record.graphData);
             showToast("Snapshot restored", "success");
         } catch (err) {
             console.warn(`[${EXTENSION_NAME}] Restore failed:`, err);
@@ -1699,13 +1719,14 @@ async function swapSnapshot(record) {
         if (!confirmed) return;
     }
 
-    // Auto-save current state before swapping (so user can get back),
-    // but skip if the graph is already a saved snapshot (browsing between old ones)
+    // Auto-save current state before swapping (so the user can get back).
+    // captureSnapshot() dedupes by hash, so this is a no-op when browsing
+    // between already-saved snapshots, but it WILL save any unsaved live edits
+    // made after a previous swap (when activeSnapshotId is still set) — which
+    // would otherwise be silently discarded by the load below.
     const prevCurrentId = currentSnapshotId;
-    if (!activeSnapshotId) {
-        const capturedId = await captureSnapshot("Current");
-        currentSnapshotId = capturedId || prevCurrentId;
-    }
+    const capturedId = await captureSnapshot("Current");
+    currentSnapshotId = capturedId || prevCurrentId;
 
     if (!record.graphData) {
         const full = await db_getFullRecord(record.workflowKey, record.id);
@@ -1723,7 +1744,7 @@ async function swapSnapshot(record) {
             await app.loadGraphData(record.graphData, true, true, workflow);
             const wfKey = getWorkflowKey();
             lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(record.graphData)));
-            lastGraphDataMap.set(wfKey, record.graphData);
+            setLastGraphData(wfKey, record.graphData);
             activeSnapshotId = record.id;
             showToast("Snapshot swapped", "success");
         } catch (err) {
@@ -2006,6 +2027,25 @@ const CSS = `
 .snap-footer button:hover {
     background: #dc2626;
     color: #fff;
+}
+.snap-footer-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+.snap-footer-row button {
+    width: auto;
+    flex: 1;
+}
+.snap-footer-row button:hover {
+    background: var(--p-primary-color, #2563eb);
+    color: #fff;
+}
+.snap-usage-label {
+    font-size: 11px;
+    color: var(--descrip-text, #888);
+    text-align: center;
+    padding: 6px 2px 0;
 }
 .snap-item-node {
     border-left: 3px solid #6d28d9;
@@ -2773,6 +2813,29 @@ function formatDate(ts) {
     return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
 }
 
+function formatBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function formatRelativeTime(ts) {
+    const diff = Date.now() - ts;
+    if (diff < 45000) return "just now";
+    const m = Math.floor(diff / 60000);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 7) return `${d}d ago`;
+    const w = Math.floor(d / 7);
+    if (w < 5) return `${w}w ago`;
+    const mo = Math.floor(d / 30);
+    if (mo < 12) return `${mo}mo ago`;
+    return `${Math.floor(d / 365)}y ago`;
+}
+
 function buildBranchNavigator(forkPointId, children, selectedIndex, refreshFn) {
     const nav = document.createElement("div");
     nav.className = "snap-branch-nav";
@@ -2843,7 +2906,7 @@ async function buildSidebar(el) {
         takeBtn.textContent = "Saving...";
         try {
             const saved = await captureSnapshot(name);
-            if (saved) showToast("Snapshot saved", "success");
+            showToast(saved ? "Snapshot saved" : "No changes since last snapshot", saved ? "success" : "info");
         } finally {
             const isViewingOther = viewingWorkflowKey != null && viewingWorkflowKey !== getWorkflowKey();
             takeBtn.disabled = isViewingOther;
@@ -2893,6 +2956,17 @@ async function buildSidebar(el) {
         filterItems(searchInput.value.toLowerCase());
     });
 
+    const pauseBtn = document.createElement("button");
+    pauseBtn.className = "snap-filter-auto-btn" + (autoCaptureEnabled ? "" : " active");
+    pauseBtn.textContent = autoCaptureEnabled ? "Auto: On" : "Auto: Off";
+    pauseBtn.title = "Pause/resume automatic snapshot capture for this session";
+    pauseBtn.addEventListener("click", () => {
+        autoCaptureEnabled = !autoCaptureEnabled;
+        pauseBtn.classList.toggle("active", !autoCaptureEnabled);
+        pauseBtn.textContent = autoCaptureEnabled ? "Auto: On" : "Auto: Off";
+        showToast(autoCaptureEnabled ? "Auto-capture resumed" : "Auto-capture paused", "info");
+    });
+
     const branchToggleBtn = document.createElement("button");
     branchToggleBtn.className = "snap-filter-auto-btn" + (isBranchingEnabled() ? " active" : "");
     branchToggleBtn.style.display = BRANCHING_ENABLED ? "" : "none";
@@ -2913,6 +2987,7 @@ async function buildSidebar(el) {
     searchRow.appendChild(searchInput);
     searchRow.appendChild(searchClear);
     searchRow.appendChild(autoFilterBtn);
+    searchRow.appendChild(pauseBtn);
     searchRow.appendChild(branchToggleBtn);
 
     // Workflow selector
@@ -3057,6 +3132,75 @@ async function buildSidebar(el) {
     const footer = document.createElement("div");
     footer.className = "snap-footer";
 
+    // Export / Import row
+    const ioRow = document.createElement("div");
+    ioRow.className = "snap-footer-row";
+
+    const usageLabel = document.createElement("div");
+    usageLabel.className = "snap-usage-label";
+    async function updateUsageLabel() {
+        const usage = await db_getStorageUsage();
+        if (!usage) { usageLabel.textContent = ""; return; }
+        usageLabel.textContent = `Storage: ${formatBytes(usage.totalBytes)} · ${usage.workflows.length} workflow(s)`;
+        usageLabel.title = "Total snapshot storage on the server";
+    }
+
+    const exportBtn = document.createElement("button");
+    exportBtn.textContent = "Export";
+    exportBtn.title = "Download all snapshots for this workflow as a JSON file";
+    exportBtn.addEventListener("click", async () => {
+        const effKey = getEffectiveWorkflowKey();
+        try {
+            const data = await db_exportWorkflow(effKey);
+            if (!data.records || data.records.length === 0) { showToast("No snapshots to export", "info"); return; }
+            const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `snapshots-${effKey.replace(/[^a-z0-9._-]+/gi, "_").slice(0, 60)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            showToast(`Exported ${data.records.length} snapshot(s)`, "success");
+        } catch (err) {
+            console.warn(`[${EXTENSION_NAME}] Export failed:`, err);
+            showToast("Export failed", "error");
+        }
+    });
+
+    const importBtn = document.createElement("button");
+    importBtn.textContent = "Import";
+    importBtn.title = "Import snapshots from an exported JSON file";
+    importBtn.addEventListener("click", () => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "application/json,.json";
+        input.addEventListener("change", async () => {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            try {
+                const parsed = JSON.parse(await file.text());
+                const records = Array.isArray(parsed) ? parsed : parsed.records;
+                if (!Array.isArray(records) || records.length === 0) { showToast("No records found in file", "error"); return; }
+                const { imported } = await db_importRecords(records);
+                showToast(`Imported ${imported} snapshot(s)`, "success");
+                pickerDirty = true;
+                await refresh(true);
+                if (timelineRefresh) timelineRefresh().catch(() => {});
+                updateUsageLabel();
+            } catch (err) {
+                console.warn(`[${EXTENSION_NAME}] Import failed:`, err);
+                showToast("Import failed — invalid file", "error");
+            }
+        });
+        input.click();
+    });
+
+    ioRow.appendChild(exportBtn);
+    ioRow.appendChild(importBtn);
+    footer.appendChild(ioRow);
+
     const clearBtn = document.createElement("button");
     clearBtn.textContent = "Clear All Snapshots";
     clearBtn.addEventListener("click", async () => {
@@ -3085,8 +3229,11 @@ async function buildSidebar(el) {
         if (timelineRefresh) {
             timelineRefresh().catch(() => {});
         }
+        updateUsageLabel();
     });
     footer.appendChild(clearBtn);
+    footer.appendChild(usageLabel);
+    updateUsageLabel();
 
     // ─── Profiles Section ──────────────────────────────────────────
     const profilesSection = document.createElement("div");
@@ -3284,7 +3431,6 @@ async function buildSidebar(el) {
     }
 
     async function refresh(resetSearch = false) {
-        svgCache.clear();
         // Hide tooltip — items are about to be destroyed so mouseleave won't fire
         if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
         tooltip.classList.remove("visible");
@@ -3293,6 +3439,8 @@ async function buildSidebar(el) {
         const isViewingOther = viewingWorkflowKey != null && viewingWorkflowKey !== currentKey;
 
         const allRecords = await db_getAllForWorkflow(effKey);
+        // Keep immutable SVG previews across refreshes; only drop stale/excess.
+        pruneSvgCache(allRecords);
 
         let nodeCount = 0;
         for (const r of allRecords) if (r.source === "node") nodeCount++;
@@ -3432,7 +3580,8 @@ async function buildSidebar(el) {
 
             const time = document.createElement("div");
             time.className = "snap-item-time";
-            time.textContent = formatTime(rec.timestamp);
+            time.textContent = formatRelativeTime(rec.timestamp);
+            time.title = formatTime(rec.timestamp);
 
             const date = document.createElement("div");
             date.className = "snap-item-date";
@@ -3482,7 +3631,19 @@ async function buildSidebar(el) {
                     const newNotes = textarea.value.trim();
                     rec.notes = newNotes || undefined;
                     await db_updateMeta(rec.workflowKey, rec.id, { notes: newNotes || null });
-                    await refresh();
+                    textarea.remove();
+                    // Update this item in place instead of rebuilding the list.
+                    noteBtn.className = "snap-btn-note" + (rec.notes ? " has-note" : "");
+                    noteBtn.title = rec.notes ? "Edit note" : "Add note";
+                    if (rec.notes) {
+                        notesDiv.textContent = rec.notes;
+                        notesDiv.title = rec.notes;
+                        notesDiv.style.display = "";
+                    } else {
+                        notesDiv.style.display = "none";
+                    }
+                    const entry = itemEntries.find((e) => e.element === item);
+                    if (entry) entry.notes = rec.notes || ""; // keep search index in sync
                 };
                 textarea.addEventListener("keydown", (ev) => {
                     if (ev.key === "Enter" && ev.ctrlKey) { ev.preventDefault(); textarea.blur(); }
@@ -3497,10 +3658,16 @@ async function buildSidebar(el) {
                 ? '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 016 0v2" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>'
                 : '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 016 0" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>';
             lockBtn.title = rec.locked ? "Unlock snapshot" : "Lock snapshot";
+            const LOCK_ICON_LOCKED = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 016 0v2" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>';
+            const LOCK_ICON_UNLOCKED = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 016 0" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>';
             lockBtn.addEventListener("click", async () => {
                 rec.locked = !rec.locked;
                 await db_updateMeta(rec.workflowKey, rec.id, { locked: rec.locked });
-                await refresh();
+                // Update just this item in place — locking is purely visual and
+                // does not change list membership/order, so skip a full rebuild.
+                lockBtn.className = rec.locked ? "snap-btn-lock snap-btn-locked" : "snap-btn-lock";
+                lockBtn.innerHTML = rec.locked ? LOCK_ICON_LOCKED : LOCK_ICON_UNLOCKED;
+                lockBtn.title = rec.locked ? "Unlock snapshot" : "Lock snapshot";
             });
 
             const swapBtn = document.createElement("button");
@@ -3528,6 +3695,11 @@ async function buildSidebar(el) {
             deleteBtn.addEventListener("click", async () => {
                 if (rec.locked) {
                     const confirmed = await showConfirmDialog("This snapshot is locked. Delete anyway?");
+                    if (!confirmed) return;
+                } else if (rec.label && !["Auto", "Initial", "Current"].includes(rec.label)) {
+                    // Confirm before deleting a named/manual/node snapshot; auto
+                    // snapshots are disposable and frequent, so skip the prompt.
+                    const confirmed = await showConfirmDialog(`Delete snapshot "${rec.label}"? This cannot be undone.`);
                     if (!confirmed) return;
                 }
                 // Fork-point deletion: rebuild tree from fresh data, then re-parent children
@@ -3622,9 +3794,11 @@ async function buildSidebar(el) {
             item.addEventListener("mouseenter", () => {
                 tooltipTimer = setTimeout(async () => {
                     tooltip.innerHTML = "";
-                    if (rec.thumbnail) {
+                    const thumbUrl = await getThumbnailDataUrl(rec);
+                    if (!tooltipTimer) return;
+                    if (thumbUrl) {
                         const img = document.createElement("img");
-                        img.src = `data:image/jpeg;base64,${rec.thumbnail}`;
+                        img.src = thumbUrl;
                         img.style.cssText = "max-width:240px;max-height:180px;border-radius:4px;display:block;";
                         tooltip.appendChild(img);
                     } else {
@@ -3665,11 +3839,11 @@ async function buildSidebar(el) {
                 tooltip.classList.remove("visible");
             });
 
-            if (rec.thumbnail) {
+            if (rec.thumbnail || rec.hasThumbnail) {
                 const thumb = document.createElement("img");
                 thumb.className = "snap-item-thumb";
-                thumb.src = `data:image/jpeg;base64,${rec.thumbnail}`;
                 item.appendChild(thumb);
+                getThumbnailDataUrl(rec).then((url) => { if (url) thumb.src = url; });
             }
             item.appendChild(info);
             item.appendChild(actions);
@@ -3996,6 +4170,17 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                 },
             },
             {
+                id: "SnapshotManager.maxAgeDays",
+                name: "Auto-delete snapshots older than (days, 0 = never)",
+                type: "slider",
+                defaultValue: 0,
+                attrs: { min: 0, max: 365, step: 1 },
+                category: ["Snapshot Manager", "Capture Settings", "Auto-delete age (days)"],
+                onChange(value) {
+                    maxAgeDays = value;
+                },
+            },
+            {
                 id: "SnapshotManager.showTimeline",
                 name: "Show snapshot timeline on canvas",
                 type: "boolean",
@@ -4103,7 +4288,12 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
 
             // Ctrl+S / Cmd+S shortcut for manual snapshot
             document.addEventListener("keydown", (e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+                if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
+                    // Ignore while typing in an editable field (node widgets, search,
+                    // note textareas) or while browsing another workflow's history.
+                    const t = e.target;
+                    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+                    if (viewingWorkflowKey != null && viewingWorkflowKey !== getWorkflowKey()) return;
                     captureSnapshot("Manual (Ctrl+S)").then((saved) => {
                         if (saved) showToast("Snapshot saved", "success");
                     }).catch(() => {});
@@ -4125,7 +4315,7 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                     const graphData = getGraphData();
                     if (graphData) {
                         lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(graphData)));
-                        lastGraphDataMap.set(wfKey, graphData);
+                        setLastGraphData(wfKey, graphData);
                     }
                     if (timelineRefresh) timelineRefresh().catch(() => {});
                 }
