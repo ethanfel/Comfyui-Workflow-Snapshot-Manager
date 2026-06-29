@@ -12,6 +12,10 @@ import { api } from "../../scripts/api.js";
 const EXTENSION_NAME = "ComfyUI.SnapshotManager";
 const RESTORE_GUARD_MS = 500;
 const INITIAL_CAPTURE_DELAY_MS = 1500;
+// Window after a programmatic workflow switch during which auto-capture is
+// suppressed — ComfyUI's loadGraphData fires graphChanged for the freshly
+// opened workflow, which must not be mistaken for a user edit.
+const SWITCH_GUARD_MS = 2000;
 const MIGRATE_BATCH_SIZE = 10;
 const OLD_DB_NAME = "ComfySnapshotManager";
 const OLD_STORE_NAME = "snapshots";
@@ -34,6 +38,7 @@ const lastCapturedHashMap = new Map();
 const lastGraphDataMap = new Map(); // workflowKey -> previous graphData for change-type detection
 let restoreLock = null;
 let captureTimer = null;
+let suppressAutoCaptureUntil = 0; // timestamp; auto-capture is ignored before it
 let sidebarRefresh = null; // callback set by sidebar render
 let viewingWorkflowKey = null; // null = follow active workflow; string = override
 let pickerDirty = true; // forces workflow picker to re-fetch on next expand
@@ -381,6 +386,22 @@ function setLastGraphData(workflowKey, graphData) {
     }
 }
 
+// Record the current graph as the dedup/change-detection baseline for a
+// workflow without taking a snapshot. Used after a programmatic load (initial
+// load, workflow switch) so the trailing graphChanged dedupes to a no-op.
+function seedWorkflowBaseline(workflowKey) {
+    const graphData = getGraphData();
+    if (!graphData) return;
+    lastCapturedHashMap.set(workflowKey, quickHash(JSON.stringify(graphData)));
+    setLastGraphData(workflowKey, graphData);
+}
+
+// Ignore auto-captures for the next `ms` milliseconds (e.g. while a workflow
+// switch settles). Manual/explicit captures are unaffected.
+function suppressAutoCapture(ms) {
+    suppressAutoCaptureUntil = Date.now() + ms;
+}
+
 // SVG previews are immutable per snapshot, so the cache can persist across
 // refreshes. Drop entries for snapshots that no longer exist and cap the size,
 // instead of clearing the whole cache on every refresh.
@@ -441,6 +462,36 @@ function getGraphData() {
     }
 }
 
+// Widget values serialize as a positional array (`widgets_values`), so a diff
+// can only say "Value[6] changed" unless we recover the widget *names*. The
+// live graph holds them: app.graph._nodes[i].widgets[j].name aligns (by index)
+// with widgets_values[j]. We map by node *id* only — an exact match — so the
+// name is always either correct or absent. (A by-type fallback would let a node
+// not on the canvas be labelled from a same-type node with a different widget
+// layout, which is worse than showing the bare index.) When a node isn't live
+// (e.g. diffing two old snapshots) the lookup misses and we fall back to
+// "Value[i]". For the capture-time diff and "snapshot vs current" the target
+// node is on the canvas, so names resolve correctly there.
+function getLiveWidgetNames() {
+    const byId = new Map();
+    try {
+        const nodes = app.graph?._nodes || [];
+        for (const n of nodes) {
+            if (!n || !Array.isArray(n.widgets) || n.id == null) continue;
+            byId.set(n.id, n.widgets.map((w) => (w && w.name != null ? String(w.name) : null)));
+        }
+    } catch {}
+    return byId;
+}
+
+// Resolve a human widget name for a node's widgets_values[index], or null.
+function widgetNameFor(widgetNames, node, index) {
+    if (!widgetNames || !node) return null;
+    const names = widgetNames.get(node.id);
+    const nm = names && names[index];
+    return nm || null;
+}
+
 function generateId() {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -474,12 +525,19 @@ function detectChangeType(prevGraph, currGraph) {
     }
 
     // Node sets identical (same length, all curr IDs exist in prev)
-    // — check links, params, positions with early exits
+    // — check links, params, positions with early exits.
+    // Cosmetic flags (move/size/collapse) describe canvas-only changes the user
+    // doesn't care to version; meaningful flags (connection/param) do.
     let flags = 0;
     const FLAG_CONNECTION = 1;
     const FLAG_PARAM = 2;
     const FLAG_MOVE = 4;
-    const ALL_FLAGS = FLAG_CONNECTION | FLAG_PARAM | FLAG_MOVE;
+    const FLAG_SIZE = 8;
+    const FLAG_COLLAPSE = 16;
+    const FLAG_MODE = 32;
+    const MEANINGFUL = FLAG_CONNECTION | FLAG_PARAM | FLAG_MODE;
+    const COSMETIC = FLAG_MOVE | FLAG_SIZE | FLAG_COLLAPSE;
+    const ALL_FLAGS = MEANINGFUL | COSMETIC;
 
     // Compare links — check length first to avoid stringify when possible
     const prevLinks = prevGraph.links || [];
@@ -529,22 +587,38 @@ function detectChangeType(prevGraph, currGraph) {
             if (cp?.[0] !== pp?.[0] || cp?.[1] !== pp?.[1]) flags |= FLAG_MOVE;
         }
 
+        // Compare size (manual node resize)
+        if (!(flags & FLAG_SIZE)) {
+            const cs = cn.size, ps = pn.size;
+            if (cs?.[0] !== ps?.[0] || cs?.[1] !== ps?.[1]) flags |= FLAG_SIZE;
+        }
+
+        // Compare collapse/pin state (node.flags.{collapsed,pinned})
+        if (!(flags & FLAG_COLLAPSE)) {
+            const cf = cn.flags || {}, pf = pn.flags || {};
+            if (!!cf.collapsed !== !!pf.collapsed || !!cf.pinned !== !!pf.pinned) flags |= FLAG_COLLAPSE;
+        }
+
+        // Compare mode (mute/bypass) — a functional change, not cosmetic
+        if (!(flags & FLAG_MODE)) {
+            if ((cn.mode || 0) !== (pn.mode || 0)) flags |= FLAG_MODE;
+        }
+
         if (flags === ALL_FLAGS) break;
     }
 
     if (flags === 0) return "unknown";
 
-    // Count set flags
-    const count = ((flags & FLAG_CONNECTION) ? 1 : 0)
-               + ((flags & FLAG_PARAM) ? 1 : 0)
-               + ((flags & FLAG_MOVE) ? 1 : 0);
-    if (count > 1) return "mixed";
+    // Only canvas-cosmetic changes (move/resize/collapse) → "cosmetic".
+    if (!(flags & MEANINGFUL)) return "cosmetic";
 
+    // A meaningful change is present; cosmetic flags don't escalate to "mixed".
+    const meaningfulCount = ((flags & FLAG_CONNECTION) ? 1 : 0)
+                          + ((flags & FLAG_PARAM) ? 1 : 0)
+                          + ((flags & FLAG_MODE) ? 1 : 0);
+    if (meaningfulCount > 1) return "mixed";
     if (flags & FLAG_CONNECTION) return "connection";
-    if (flags & FLAG_PARAM) return "param";
-    if (flags & FLAG_MOVE) return "move";
-
-    return "unknown";
+    return "param"; // param or mode-only → treated as a parameter change
 }
 
 // ─── Detailed Diff ──────────────────────────────────────────────────
@@ -562,7 +636,7 @@ function buildNodeLookup(...graphs) {
     return map;
 }
 
-function computeDetailedDiff(baseGraph, targetGraph) {
+function computeDetailedDiff(baseGraph, targetGraph, widgetMaps = null) {
     const empty = {
         addedNodes: [], removedNodes: [], modifiedNodes: [],
         addedLinks: [], removedLinks: [],
@@ -630,7 +704,7 @@ function computeDetailedDiff(baseGraph, targetGraph) {
                     if (bv !== tv) {
                         const bs = typeof bv === "object" ? JSON.stringify(bv) : String(bv ?? "");
                         const ts = typeof tv === "object" ? JSON.stringify(tv) : String(tv ?? "");
-                        if (bs !== ts) diffs.push({ index: i, from: bs, to: ts });
+                        if (bs !== ts) diffs.push({ index: i, name: widgetNameFor(widgetMaps, tn, i), from: bs, to: ts });
                     }
                 }
                 if (diffs.length > 0) changes.widgetValues = diffs;
@@ -693,10 +767,11 @@ function computeDetailedDiff(baseGraph, targetGraph) {
     };
 }
 
-// Compact diff stored in snapshot metadata for hover display
-function computeCaptureMetaDiff(prevGraph, currGraph) {
+// Compact diff stored in snapshot metadata for hover display. widgetMaps comes
+// from the live graph at capture time so changed parameters are named.
+function computeCaptureMetaDiff(prevGraph, currGraph, widgetMaps = null) {
     if (!prevGraph || !currGraph) return null;
-    const diff = computeDetailedDiff(prevGraph, currGraph);
+    const diff = computeDetailedDiff(prevGraph, currGraph, widgetMaps);
     const result = {};
     if (diff.addedNodes.length > 0)
         result.added = diff.addedNodes.map(n => n.title);
@@ -708,6 +783,17 @@ function computeCaptureMetaDiff(prevGraph, currGraph) {
     );
     if (paramChanged.length > 0)
         result.params = paramChanged.map(n => {
+            // Prefer naming the changed widgets/props; fall back to a count.
+            const names = [];
+            if (Array.isArray(n.changes.widgetValues)) {
+                for (const wv of n.changes.widgetValues) if (wv.name) names.push(wv.name);
+            }
+            if (Array.isArray(n.changes.properties)) {
+                for (const pv of n.changes.properties) if (pv.key) names.push(pv.key);
+            }
+            if (n.changes.title) names.push("title");
+            if (n.changes.mode) names.push("mode");
+            if (names.length > 0) return `${n.title} (${names.join(", ")})`;
             const wvCount = Array.isArray(n.changes.widgetValues) ? n.changes.widgetValues.length : (n.changes.widgetValues ? 1 : 0);
             const count = wvCount + (n.changes.properties?.length ?? 0);
             return count > 0 ? `${n.title} (${count} value${count > 1 ? "s" : ""})` : n.title;
@@ -1334,40 +1420,13 @@ function showDiffModal(baseLabel, targetLabel, diff, allNodes, baseGraphData, ta
             wrap.appendChild(header);
 
             const { changes } = n;
-            if (changes.position) {
-                const d = document.createElement("div");
-                d.className = "snap-diff-change-detail";
-                const from = changes.position.from || [0, 0];
-                const to = changes.position.to || [0, 0];
-                d.appendChild(makeValueChange("Position", `[${Math.round(from[0])}, ${Math.round(from[1])}]`, `[${Math.round(to[0])}, ${Math.round(to[1])}]`));
-                wrap.appendChild(d);
-            }
-            if (changes.size) {
-                const d = document.createElement("div");
-                d.className = "snap-diff-change-detail";
-                const from = changes.size.from || [0, 0];
-                const to = changes.size.to || [0, 0];
-                d.appendChild(makeValueChange("Size", `[${Math.round(from[0])}, ${Math.round(from[1])}]`, `[${Math.round(to[0])}, ${Math.round(to[1])}]`));
-                wrap.appendChild(d);
-            }
-            if (changes.title) {
-                const d = document.createElement("div");
-                d.className = "snap-diff-change-detail";
-                d.appendChild(makeValueChange("Title", changes.title.from, changes.title.to));
-                wrap.appendChild(d);
-            }
-            if (changes.mode) {
-                const d = document.createElement("div");
-                d.className = "snap-diff-change-detail";
-                d.appendChild(makeValueChange("Mode", String(changes.mode.from), String(changes.mode.to)));
-                wrap.appendChild(d);
-            }
+            // Meaningful changes first: named parameters, properties, title, mode.
             if (changes.widgetValues) {
                 if (Array.isArray(changes.widgetValues)) {
                     for (const wv of changes.widgetValues) {
                         const d = document.createElement("div");
                         d.className = "snap-diff-change-detail";
-                        d.appendChild(makeValueChange(`Value[${wv.index}]`, wv.from, wv.to));
+                        d.appendChild(makeValueChange(wv.name || `Value[${wv.index}]`, wv.from, wv.to));
                         wrap.appendChild(d);
                     }
                 } else {
@@ -1381,9 +1440,32 @@ function showDiffModal(baseLabel, targetLabel, diff, allNodes, baseGraphData, ta
                 for (const pv of changes.properties) {
                     const d = document.createElement("div");
                     d.className = "snap-diff-change-detail";
-                    d.appendChild(makeValueChange(`prop.${pv.key}`, pv.from, pv.to));
+                    d.appendChild(makeValueChange(pv.key, pv.from, pv.to));
                     wrap.appendChild(d);
                 }
+            }
+            if (changes.title) {
+                const d = document.createElement("div");
+                d.className = "snap-diff-change-detail";
+                d.appendChild(makeValueChange("Title", changes.title.from, changes.title.to));
+                wrap.appendChild(d);
+            }
+            if (changes.mode) {
+                const d = document.createElement("div");
+                d.className = "snap-diff-change-detail";
+                d.appendChild(makeValueChange("Mode", String(changes.mode.from), String(changes.mode.to)));
+                wrap.appendChild(d);
+            }
+            // Cosmetic (position/size) collapsed into one muted line at the end.
+            const cosmeticBits = [];
+            if (changes.position) cosmeticBits.push("moved");
+            if (changes.size) cosmeticBits.push("resized");
+            if (cosmeticBits.length) {
+                const d = document.createElement("div");
+                d.className = "snap-diff-change-detail";
+                d.style.opacity = "0.5";
+                d.textContent = `Layout: ${cosmeticBits.join(", ")}`;
+                wrap.appendChild(d);
             }
             return wrap;
         });
@@ -1564,14 +1646,18 @@ async function showPreviewModal(record) {
 
 let captureInProgress = false;
 
-async function captureSnapshot(label = "Auto") {
+// skipCosmetic is an AUTO-capture concern only: the debounced auto path passes
+// true so node moves/resizes/collapses don't spawn snapshots. Manual saves and
+// the pre-swap/pre-restore "Current" capture pass false so an explicit save —
+// or preserving unsaved layout work before a load — is never silently dropped.
+async function captureSnapshot(label = "Auto", { skipCosmetic = false } = {}) {
     if (restoreLock) return false;
     if (captureInProgress) return false;
     captureInProgress = true;
-    try { return await _captureCore({ label, dedupe: true, skipMove: true }); } finally { captureInProgress = false; }
+    try { return await _captureCore({ label, dedupe: true, skipCosmetic }); } finally { captureInProgress = false; }
 }
 
-async function _captureCore({ label, source = null, thumbnail = null, dedupe = false, skipMove = false }) {
+async function _captureCore({ label, source = null, thumbnail = null, dedupe = false, skipCosmetic = false }) {
 
     const graphData = getGraphData();
     if (!graphData) return false;
@@ -1586,7 +1672,10 @@ async function _captureCore({ label, source = null, thumbnail = null, dedupe = f
 
     const prevGraph = lastGraphDataMap.get(workflowKey);
     const changeType = detectChangeType(prevGraph, graphData);
-    if (skipMove && changeType === "move") return false;
+    // Auto-captures ignore canvas-cosmetic changes (move/resize/collapse); the
+    // cosmetic edit will ride along with the next meaningful snapshot. Manual
+    // and node-triggered captures (skipCosmetic=false) always save.
+    if (skipCosmetic && changeType === "cosmetic") return false;
 
     // Determine parentId for branching
     let parentId = null;
@@ -1598,7 +1687,7 @@ async function _captureCore({ label, source = null, thumbnail = null, dedupe = f
         }
     }
 
-    const captureDiff = computeCaptureMetaDiff(prevGraph, graphData);
+    const captureDiff = computeCaptureMetaDiff(prevGraph, graphData, getLiveWidgetNames());
     const record = {
         id: generateId(),
         workflowKey,
@@ -1671,10 +1760,11 @@ async function captureNodeSnapshot(label = "Node Trigger", thumbnail = null) {
 function scheduleCaptureSnapshot() {
     if (!autoCaptureEnabled) return;
     if (restoreLock) return;
+    if (Date.now() < suppressAutoCaptureUntil) return;
     if (captureTimer) clearTimeout(captureTimer);
     captureTimer = setTimeout(() => {
         captureTimer = null;
-        captureSnapshot("Auto").catch((err) => {
+        captureSnapshot("Auto", { skipCosmetic: true }).catch((err) => {
             console.warn(`[${EXTENSION_NAME}] Auto-capture failed:`, err);
         });
     }, debounceMs);
@@ -1709,7 +1799,7 @@ async function restoreSnapshot(record) {
     });
 }
 
-async function swapSnapshot(record) {
+async function swapSnapshot(record, { quiet = false } = {}) {
     // Warn when swapping in a snapshot from a different workflow
     const currentKey = getWorkflowKey();
     if (record.workflowKey && record.workflowKey !== currentKey) {
@@ -1746,12 +1836,46 @@ async function swapSnapshot(record) {
             lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(record.graphData)));
             setLastGraphData(wfKey, record.graphData);
             activeSnapshotId = record.id;
-            showToast("Snapshot swapped", "success");
+            if (!quiet) showToast("Snapshot swapped", "success");
         } catch (err) {
             console.warn(`[${EXTENSION_NAME}] Swap failed:`, err);
             showToast("Failed to swap snapshot", "error");
         }
     });
+}
+
+// Non-destructive step to the previous (-1) or next (+1) snapshot in
+// chronological order. Browsing between already-saved states is a storage
+// no-op (captureSnapshot dedupes) and never deletes later snapshots, so
+// back/forth is cheap and reversible — the Fusion-360 "roll the marker" feel.
+let stepInProgress = false;
+async function stepToSnapshot(direction) {
+    const wfKey = getWorkflowKey();
+    // Don't hijack the keys while browsing another workflow's history.
+    if (viewingWorkflowKey != null && viewingWorkflowKey !== wfKey) return;
+    // Re-entrancy guard: holding Alt+Arrow must not launch overlapping swaps
+    // (which would race and spam the "please wait" toast from withRestoreLock).
+    if (stepInProgress || restoreLock) return;
+    stepInProgress = true;
+    try {
+        let recs;
+        try { recs = await db_getAllForWorkflow(wfKey); } catch { return; }
+        if (!recs || recs.length === 0) return;
+        recs.sort((a, b) => a.timestamp - b.timestamp);
+        const currentId = activeSnapshotId ?? currentSnapshotId ?? lastCapturedIdMap.get(wfKey);
+        let idx = recs.findIndex(r => r.id === currentId);
+        if (idx === -1) idx = recs.length - 1; // unknown position → treat as latest
+        const nextIdx = idx + direction;
+        if (nextIdx < 0 || nextIdx >= recs.length) {
+            showToast(direction < 0 ? "At earliest snapshot" : "At latest snapshot", "info");
+            return;
+        }
+        const target = recs[nextIdx];
+        await swapSnapshot(target, { quiet: true });
+        showToast(`${nextIdx + 1}/${recs.length} · ${target.label}`, "info");
+    } finally {
+        stepInProgress = false;
+    }
 }
 
 // ─── Sidebar UI ──────────────────────────────────────────────────────
@@ -2783,6 +2907,11 @@ const CHANGE_TYPE_ICONS = {
         color: "#64748b",
         label: "Nodes repositioned",
     },
+    cosmetic: {
+        svg: '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M6 1L3 4h6L6 1ZM6 11L3 8h6L6 11Z" fill="currentColor"/></svg>',
+        color: "#64748b",
+        label: "Layout only",
+    },
     mixed: {
         svg: '<svg width="10" height="10" viewBox="0 0 12 12"><path d="M6 1L7.5 4.5H11L8.25 6.75L9.5 10.5L6 8L2.5 10.5L3.75 6.75L1 4.5H4.5Z" fill="currentColor"/></svg>',
         color: "#f97316",
@@ -3767,7 +3896,7 @@ async function buildSidebar(el) {
                         baseLabel = rec.label;
                         targetLabel = "Current Workflow";
                     }
-                    const diff = computeDetailedDiff(baseGraph, targetGraph);
+                    const diff = computeDetailedDiff(baseGraph, targetGraph, getLiveWidgetNames());
                     const allNodes = buildNodeLookup(baseGraph, targetGraph);
                     showDiffModal(baseLabel, targetLabel, diff, allNodes, baseGraph, targetGraph);
                 })();
@@ -4267,6 +4396,12 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                             activeBranchSelections.clear();
                             // Seed active ring for the new workflow tab
                             const newKey = getWorkflowKey();
+                            // Re-seed the dedup/change-detection baseline for the new
+                            // tab and suppress auto-capture briefly, so the graphChanged
+                            // fired by loading this workflow doesn't spawn a redundant
+                            // "Auto" snapshot of a workflow the user only just opened.
+                            seedWorkflowBaseline(newKey);
+                            suppressAutoCapture(SWITCH_GUARD_MS);
                             trackSessionWorkflow(newKey);
                             db_getAllForWorkflow(newKey).then(recs => {
                                 if (recs.length > 0 && !lastCapturedIdMap.has(newKey)) {
@@ -4299,6 +4434,17 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                     }).catch(() => {});
                     // Don't preventDefault — let ComfyUI's own workflow save still fire
                 }
+            });
+
+            // Alt+Left / Alt+Right step non-destructively through snapshot history
+            // (Fusion-360 "roll the history marker" feel — jump back/forth freely).
+            document.addEventListener("keydown", (e) => {
+                if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+                if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+                const t = e.target;
+                if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+                e.preventDefault();
+                stepToSnapshot(e.key === "ArrowLeft" ? -1 : 1).catch(() => {});
             });
 
             // Build the timeline bar on the canvas
