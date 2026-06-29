@@ -1778,9 +1778,10 @@ async function restoreSnapshot(record) {
         if (!full) { showToast("Failed to load snapshot data", "error"); return; }
         record = full;
     }
-    // Preserve any unsaved live edits before replacing the canvas (parity with
-    // swap). Deduped by hash, so it's a no-op when there is nothing new to save.
-    await captureSnapshot("Current").catch(() => {});
+    // Preserve any unsaved meaningful edit before replacing the canvas (parity
+    // with swap). Deduped by hash and skips cosmetic-only changes, so it's a
+    // no-op when there is nothing meaningful new to save.
+    await captureSnapshot("Current", { skipCosmetic: true }).catch(() => {});
     await withRestoreLock(async () => {
         if (!validateSnapshotData(record.graphData)) {
             showToast("Invalid snapshot data", "error");
@@ -1789,8 +1790,13 @@ async function restoreSnapshot(record) {
         try {
             await app.loadGraphData(record.graphData, true, true);
             const wfKey = getWorkflowKey();
-            lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(record.graphData)));
-            setLastGraphData(wfKey, record.graphData);
+            // Seed the dedup baseline from the LIVE re-serialization, not the
+            // stored record: ComfyUI's serialize() of the loaded graph isn't
+            // byte-identical to the saved bytes, so seeding from record.graphData
+            // makes the next captureSnapshot() hash mismatch and spuriously save.
+            const liveGraph = getGraphData() || record.graphData;
+            lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(liveGraph)));
+            setLastGraphData(wfKey, liveGraph);
             showToast("Snapshot restored", "success");
         } catch (err) {
             console.warn(`[${EXTENSION_NAME}] Restore failed:`, err);
@@ -1814,8 +1820,11 @@ async function swapSnapshot(record, { quiet = false } = {}) {
     // between already-saved snapshots, but it WILL save any unsaved live edits
     // made after a previous swap (when activeSnapshotId is still set) — which
     // would otherwise be silently discarded by the load below.
+    // Preserve a genuine unsaved edit before loading, but skip cosmetic-only
+    // changes (move/resize/collapse) and dedup no-ops so that merely browsing
+    // between snapshots never spawns a "Current" snapshot (the reported spam).
     const prevCurrentId = currentSnapshotId;
-    const capturedId = await captureSnapshot("Current");
+    const capturedId = await captureSnapshot("Current", { skipCosmetic: true });
     currentSnapshotId = capturedId || prevCurrentId;
 
     if (!record.graphData) {
@@ -1833,8 +1842,14 @@ async function swapSnapshot(record, { quiet = false } = {}) {
             const workflow = app.extensionManager?.workflow?.activeWorkflow;
             await app.loadGraphData(record.graphData, true, true, workflow);
             const wfKey = getWorkflowKey();
-            lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(record.graphData)));
-            setLastGraphData(wfKey, record.graphData);
+            // Seed the dedup baseline from the LIVE re-serialization, not the
+            // stored record: ComfyUI's serialize() of the loaded graph isn't
+            // byte-identical to the saved bytes, so seeding from record.graphData
+            // makes the next captureSnapshot() hash mismatch and spuriously save a
+            // "Current" snapshot on every swap (the reported timeline-swap spam).
+            const liveGraph = getGraphData() || record.graphData;
+            lastCapturedHashMap.set(wfKey, quickHash(JSON.stringify(liveGraph)));
+            setLastGraphData(wfKey, liveGraph);
             activeSnapshotId = record.id;
             if (!quiet) showToast("Snapshot swapped", "success");
         } catch (err) {
