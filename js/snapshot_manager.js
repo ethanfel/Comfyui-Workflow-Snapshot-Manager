@@ -4411,12 +4411,16 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                             activeBranchSelections.clear();
                             // Seed active ring for the new workflow tab
                             const newKey = getWorkflowKey();
-                            // Re-seed the dedup/change-detection baseline for the new
-                            // tab and suppress auto-capture briefly, so the graphChanged
-                            // fired by loading this workflow doesn't spawn a redundant
-                            // "Auto" snapshot of a workflow the user only just opened.
-                            seedWorkflowBaseline(newKey);
-                            suppressAutoCapture(SWITCH_GUARD_MS);
+                            // Suppress auto-capture briefly so the graphChanged fired
+                            // by loading this workflow doesn't spawn a redundant "Auto"
+                            // snapshot of a workflow the user only just opened. Guard
+                            // everything so a failure here can never break the switch.
+                            try {
+                                suppressAutoCapture(SWITCH_GUARD_MS);
+                                seedWorkflowBaseline(newKey);
+                            } catch (err) {
+                                console.warn(`[${EXTENSION_NAME}] post-switch seeding failed:`, err);
+                            }
                             trackSessionWorkflow(newKey);
                             db_getAllForWorkflow(newKey).then(recs => {
                                 if (recs.length > 0 && !lastCapturedIdMap.has(newKey)) {
@@ -4451,16 +4455,9 @@ if (window.__COMFYUI_FRONTEND_VERSION__) {
                 }
             });
 
-            // Alt+Left / Alt+Right step non-destructively through snapshot history
-            // (Fusion-360 "roll the history marker" feel — jump back/forth freely).
-            document.addEventListener("keydown", (e) => {
-                if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-                if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-                const t = e.target;
-                if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-                e.preventDefault();
-                stepToSnapshot(e.key === "ArrowLeft" ? -1 : 1).catch(() => {});
-            });
+            // (Keyboard step-navigation removed: a global Alt+Left/Right handler
+            // collides with the browser's Back/Forward. stepToSnapshot() remains
+            // for a future, conflict-free binding or a timeline button.)
 
             // Build the timeline bar on the canvas
             buildTimeline();
